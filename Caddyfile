@@ -1,0 +1,56 @@
+# Brightloop Software — Production Reverse Proxy Configuration
+# Automated Let's Encrypt HTTPS / TLS, Security Headers, and Reverse Proxy Routing
+
+{$DOMAIN:localhost} {
+    # Automated TLS with ACME
+    tls {$ACME_EMAIL:admin@brightloop.local}
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+
+    # Gzip and Zstandard compression
+    encode gzip zstd
+
+    # API routes -> Backend FastAPI service
+    handle /api/* {
+        reverse_proxy backend:8000 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Real-IP {remote_host}
+        }
+    }
+
+    # Health check probe -> Backend
+    handle /health {
+        reverse_proxy backend:8000
+    }
+
+    # API docs -> Backend
+    handle /docs* {
+        reverse_proxy backend:8000
+    }
+    handle /openapi.json {
+        reverse_proxy backend:8000
+    }
+
+    # All other web requests -> Frontend Single Page Application
+    handle {
+        reverse_proxy frontend:80 {
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Structured access logging
+    log {
+        output stdout
+        format json
+    }
+}
+

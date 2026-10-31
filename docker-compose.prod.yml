@@ -1,0 +1,148 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: brightloop-prod-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brightloop_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Database password required}
+      POSTGRES_DB: ${POSTGRES_DB:-brightloop_production}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-brightloop_admin} -d ${POSTGRES_DB:-brightloop_production}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+
+  redis:
+    image: redis:7-alpine
+    container_name: brightloop-prod-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Redis password required}"]
+    volumes:
+      - redis_prod_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brightloop-prod-backend
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - SECRET_KEY=${SECRET_KEY:?Production secret key required}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-brightloop_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-brightloop_production}
+      - SYNC_DATABASE_URL=postgresql://${POSTGRES_USER:-brightloop_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-brightloop_production}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - SMTP_HOST=${SMTP_HOST:?Production SMTP host required}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-billing@brightloop.com}
+      - FRONTEND_URL=https://${DOMAIN:-localhost}
+      - CORS_ORIGINS=https://${DOMAIN:-localhost}
+      - SESSION_COOKIE_SECURE=true
+      - TRUST_PROXY_HEADERS=true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brightloop-prod-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-brightloop_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-brightloop_production}
+      - SYNC_DATABASE_URL=postgresql://${POSTGRES_USER:-brightloop_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-brightloop_production}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-billing@brightloop.com}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brightloop-prod-scheduler
+    restart: unless-stopped
+    command: ["celery", "-A", "app.worker.celery_app", "beat", "--loglevel=info"]
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-brightloop_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-brightloop_production}
+      - SYNC_DATABASE_URL=postgresql://${POSTGRES_USER:-brightloop_admin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-brightloop_production}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: brightloop-prod-frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=https://${DOMAIN:-localhost}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  proxy:
+    image: caddy:2-alpine
+    container_name: brightloop-prod-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@brightloop.com}
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_prod_data:
+  redis_prod_data:
+  caddy_data:
+  caddy_config:
+

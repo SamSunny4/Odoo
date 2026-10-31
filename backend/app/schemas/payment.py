@@ -34,6 +34,7 @@ class PaymentResponse(BaseModel):
     is_reversed: bool = False
     created_at: Optional[datetime] = None
     reversal: Optional[PaymentReversalResponse] = None
+    reversals: List[PaymentReversalResponse] = Field(default_factory=list)
 
 
 class PaymentDetailResponse(PaymentResponse):

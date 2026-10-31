@@ -54,6 +54,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const [drillSearch, setDrillSearch] = useState<string>('');
   const [drillPlanId, setDrillPlanId] = useState<string>('');
   const [drillCustomerId, setDrillCustomerId] = useState<string>('');
+  const [drillStatus, setDrillStatus] = useState<string>('');
 
   // Lookup Options State
   const [plans, setPlans] = useState<PlanApiItem[]>([]);
@@ -83,6 +84,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         period,
         plan_id: drillPlanId || undefined,
         customer_account_id: drillCustomerId || undefined,
+        status: drillStatus || undefined,
         search: drillSearch || undefined,
         page: drillPage,
         page_size: drillPageSize,
@@ -93,7 +95,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     } finally {
       setDrillLoading(false);
     }
-  }, [isAdmin, activeMetric, period, drillPlanId, drillCustomerId, drillSearch, drillPage, drillPageSize]);
+  }, [isAdmin, activeMetric, period, drillPlanId, drillCustomerId, drillStatus, drillSearch, drillPage, drillPageSize]);
 
   // 3. Load Filters (Plans & Customers)
   useEffect(() => {
@@ -120,6 +122,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           currency: summary?.currency || 'USD',
         }).format(Number(value));
 
+  const moneyForCurrency = (value: MoneyValue | null | undefined, currency?: string) =>
+    value === null || value === undefined
+      ? '—'
+      : new Intl.NumberFormat(undefined, {
+          style: 'currency',
+          currency: currency || summary?.currency || 'USD',
+        }).format(Number(value));
+
   const handleCardClick = (metricKey: string) => {
     if (!isAdmin) return;
     setActiveMetric(metricKey);
@@ -132,6 +142,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       period,
       plan_id: drillPlanId || undefined,
       customer_account_id: drillCustomerId || undefined,
+      status: drillStatus || undefined,
       search: drillSearch || undefined,
     });
     window.open(exportUrl, '_blank');
@@ -423,7 +434,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           </div>
 
           {/* Drill-Down Filter Toolbar */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
             {/* Metric Switcher Dropdown */}
             <div>
               <label className="block font-semibold text-slate-700 mb-1">Metric View</label>
@@ -484,6 +495,36 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               </select>
             </div>
 
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Filter by Status</label>
+              <select
+                value={drillStatus}
+                onChange={(e) => {
+                  setDrillStatus(e.target.value);
+                  setDrillPage(1);
+                }}
+                className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
+              >
+                <option value="">All Statuses</option>
+                {activeMetric === 'collected' ? (
+                  <>
+                    <option value="settled">Settled</option>
+                    <option value="partially_refunded">Partially refunded</option>
+                    <option value="reversed">Reversed</option>
+                  </>
+                ) : activeMetric === 'subscriptions' ? (
+                  <option value="active">Active</option>
+                ) : (
+                  <>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="paid">Paid</option>
+                    <option value="draft">Draft</option>
+                    <option value="cancelled">Cancelled</option>
+                  </>
+                )}
+              </select>
+            </div>
+
             {/* Search */}
             <div>
               <label className="block font-semibold text-slate-700 mb-1">Search</label>
@@ -539,13 +580,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-900">
-                          ${Number(row.amount).toFixed(2)}
+                          {moneyForCurrency(row.amount, row.currency)}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono text-emerald-600">
-                          ${Number(row.paid_amount || 0).toFixed(2)}
+                          {moneyForCurrency(row.paid_amount || 0, row.currency)}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-semibold text-red-600">
-                          ${Number(row.balance || 0).toFixed(2)}
+                          {moneyForCurrency(row.balance || 0, row.currency)}
                         </td>
                       </tr>
                     ))}
@@ -556,7 +597,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-xs">
                 <div className="text-slate-600 font-medium">
                   Showing {drillData.items.length} of {drillData.total_items} records • Filtered Total:{' '}
-                  <span className="font-bold font-mono text-slate-900">${Number(drillData.total_amount).toFixed(2)}</span>
+                  <span className="font-bold font-mono text-slate-900">{money(drillData.total_amount)}</span>
                 </div>
                 <PaginationControls
                   page={drillPage}

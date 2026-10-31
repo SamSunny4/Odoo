@@ -93,6 +93,14 @@ async def test_drill_down_invoiced_revenue(client: AsyncClient, seed_users):
     assert matched["entity_type"] == "invoice"
     assert matched["customer_name"] == customer_account.company_name
     assert Decimal(str(matched["amount"])) > Decimal("0.00")
+    invoiced_summary = await client.get("/api/v1/reports/summary?period=this_month", cookies=admin_cookies)
+    assert Decimal(str(dd_data["total_amount"])) == Decimal(str(invoiced_summary.json()["invoiced_revenue"]))
+
+    mrr_report = await client.get("/api/v1/reports/drill-down?metric=subscriptions&period=this_month", cookies=admin_cookies)
+    assert mrr_report.status_code == 200
+    assert Decimal(str(mrr_report.json()["total_amount"])) == Decimal(
+        str(invoiced_summary.json()["monthly_recurring_revenue"])
+    )
 
 
 @pytest.mark.asyncio
@@ -134,7 +142,7 @@ async def test_drill_down_cash_collected_vs_invoiced(client: AsyncClient, seed_u
             "invoice_id": inv_id,
             "amount": 75.00,
             "payment_method": "bank_transfer",
-            "payment_date": date.today().isoformat(),
+            "payment_date": organization_today().isoformat(),
             "reference_note": "Audit Verification Remittance",
         },
         cookies=admin_cookies,
@@ -142,7 +150,16 @@ async def test_drill_down_cash_collected_vs_invoiced(client: AsyncClient, seed_u
     assert pay_res.status_code == 201
     pay_id = pay_res.json()["id"]
 
-    # Drill down by collected metric
+    # Partial refund must reduce cash collected by exactly the refunded amount.
+    refund_res = await client.post(
+        f"/api/v1/payments/{pay_id}/reverse",
+        json={"amount": 25.00, "reason": "Refund part of remittance"},
+        cookies=admin_cookies,
+    )
+    assert refund_res.status_code == 200
+    assert refund_res.json()["is_reversed"] is False
+
+    # Drill down and summary must reconcile to the same net cash amount.
     dd_res = await client.get("/api/v1/reports/drill-down?metric=collected&period=this_month", cookies=admin_cookies)
     assert dd_res.status_code == 200
     dd_data = dd_res.json()
@@ -152,7 +169,16 @@ async def test_drill_down_cash_collected_vs_invoiced(client: AsyncClient, seed_u
     matched_pay = next(item for item in dd_data["items"] if item["id"] == pay_id)
     assert matched_pay["entity_type"] == "payment"
     assert matched_pay["metric_category"] == "Cash Collections"
-    assert Decimal(str(matched_pay["amount"])) == Decimal("75.00")
+    assert Decimal(str(matched_pay["amount"])) == Decimal("50.00")
+    assert Decimal(str(dd_data["total_amount"])) == Decimal("50.00")
+    summary_res = await client.get("/api/v1/reports/summary?period=this_month", cookies=admin_cookies)
+    assert summary_res.status_code == 200
+    assert Decimal(str(summary_res.json()["cash_collected"])) == Decimal("50.00")
+    outstanding_res = await client.get("/api/v1/reports/drill-down?metric=outstanding", cookies=admin_cookies)
+    assert outstanding_res.status_code == 200
+    assert Decimal(str(outstanding_res.json()["total_amount"])) == Decimal(
+        str(summary_res.json()["outstanding_balance"])
+    )
 
 
 @pytest.mark.asyncio
@@ -180,6 +206,18 @@ async def test_drill_down_filtering_and_pagination(client: AsyncClient, seed_use
     )
     assert plan_res.status_code == 200
     assert plan_res.json()["metric"] == "subscriptions"
+
+    partial_period = await client.get(
+        "/api/v1/reports/summary?period=custom&start_date=2026-10-01",
+        cookies=admin_cookies,
+    )
+    assert partial_period.status_code == 422
+
+    reversed_period = await client.get(
+        "/api/v1/reports/summary?period=custom&start_date=2026-10-31&end_date=2026-10-01",
+        cookies=admin_cookies,
+    )
+    assert reversed_period.status_code == 422
 
 
 @pytest.mark.asyncio

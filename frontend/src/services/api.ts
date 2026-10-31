@@ -580,6 +580,14 @@ export interface PaymentApiItem {
     reversed_by_user_id: string;
     reversed_at: string;
   } | null;
+  reversals?: Array<{
+    id: string;
+    payment_id: string;
+    reversal_amount: MoneyValue;
+    reason: string;
+    reversed_by_user_id: string;
+    reversed_at: string;
+  }>;
 }
 
 export interface CollectionItem {

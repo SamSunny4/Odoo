@@ -4,6 +4,11 @@ from datetime import date
 from decimal import Decimal
 
 
+def overdue_reminder_window(days_overdue: int) -> str:
+    """Return the shared idempotency window for manual and scheduled reminders."""
+    return "initial" if days_overdue <= 6 else f"week-{((days_overdue - 7) // 7) + 1}"
+
+
 def password_reset_email(reset_link: str) -> tuple[str, str]:
     return (
         "Password Reset Request — Brightloop Software",

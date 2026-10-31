@@ -15,6 +15,7 @@ Before recurring runs generate real invoices, Brightloop operations teams open t
 - **Pre-Flight Run Audit**: Previews line-level calculations, expected discounts, and taxes for every due subscription.
 - **Anomaly Detection**: Automatically flags expired plans, exhausted discount limits, missing customer tax details, or prior-invoice price variances.
 - **Transactional Idempotency**: Guarantees that repeating or retrying a run will never double-bill a customer or skip a billing cycle.
+- **CSV Batch Exports**: Directly export billing previews and variance explanations to CSV for month-end accounting reconciliations.
 
 ---
 
@@ -94,8 +95,38 @@ docker compose up -d --build
 
 ---
 
-## 4. Architectural Documents
+## 4. Production Operations & Release Readiness
 
+### 4.1 Production Stack Launch (Caddy Automated TLS + Docker)
+```bash
+cp .env.production.example .env.production
+# Edit .env.production with your domain and production secrets
+
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
+```
+
+### 4.2 Database Backup & Disaster Recovery
+```bash
+# Take a point-in-time database snapshot
+./scripts/backup.sh
+# In PowerShell:
+.\scripts\backup.ps1
+
+# Restore a snapshot into PostgreSQL
+./scripts/restore.sh backups/brightloop_backup_YYYYMMDD_HHMMSS.sql --force
+# In PowerShell:
+.\scripts\restore.ps1 -BackupFile "backups/brightloop_backup_YYYYMMDD_HHMMSS.sql"
+
+# Automated Rehearsal & Verification
+python scripts/rehearse_backup_restore.py
+```
+
+---
+
+## 5. Architectural Documents & Operations Guides
+
+- **Production Operations Runbook**: [docs/RUNBOOK.md](docs/RUNBOOK.md)
 - **Domain Model & ER Specifications**: [docs/architecture.md](docs/architecture.md)
 - **Implementation Plan**: [implementationplan.md](implementationplan.md)
 - **Feature Set**: [features.md](features.md)
@@ -103,7 +134,7 @@ docker compose up -d --build
 
 ---
 
-## 5. Verification & Testing
+## 6. Verification & Testing
 
 ```bash
 # Run backend test suite
@@ -114,4 +145,3 @@ cd backend && pytest -v
 # Run frontend typecheck and production bundle build
 cd frontend && npm run build
 ```
-

@@ -151,16 +151,23 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
   }, [activeTab]);
 
   const toggleItem = (itemId: string) => {
-    setSelectedIds((current) =>
-      current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId]
-    );
+    if (selectedIds.includes(itemId)) {
+      setSelectedIds(selectedIds.filter((id) => id !== itemId));
+      return;
+    }
+    if (selectedIds.length >= 50) {
+      setError('Interactive commits are limited to 50 invoices. Commit a smaller preview batch.');
+      return;
+    }
+    setSelectedIds([...selectedIds, itemId]);
   };
 
   const handleSelectAllClean = () => {
-    if (selectedIds.length === cleanItems.length) {
+    const firstFifty = cleanItems.slice(0, 50).map((item) => item.id);
+    if (selectedIds.length === firstFifty.length && firstFifty.every((id) => selectedIds.includes(id))) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(cleanItems.map((i) => i.id));
+      setSelectedIds(firstFifty);
     }
   };
 
@@ -399,8 +406,9 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                   disabled={committed || !isAdmin || cleanItems.length === 0}
                   className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold disabled:opacity-50"
                 >
-                  {selectedIds.length === cleanItems.length ? 'Deselect All' : `Select All Clean (${cleanItems.length})`}
+                  {selectedIds.length === cleanItems.length ? 'Deselect All' : `Select First 50 Clean (${Math.min(cleanItems.length, 50)})`}
                 </button>
+                <span className="text-xs text-slate-500">Interactive commits are limited to 50 invoices.</span>
               </div>
               <div className="flex items-center gap-2">
                 <label htmlFor="batch-size" className="text-xs font-semibold text-slate-500">

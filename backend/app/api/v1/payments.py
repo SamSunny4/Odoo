@@ -12,6 +12,7 @@ from app.core.clock import organization_today
 from app.models.invoice import Invoice, InvoiceStatus
 from app.models.customer import CustomerAccount
 from app.models.payment import Payment, PaymentMethod, PaymentReversal
+from app.models.outbox import OutboxMessage
 from app.models.user import User
 from app.models.audit import AuditEvent
 from app.schemas.payment import (
@@ -29,7 +30,7 @@ from app.schemas.payment import (
 from app.schemas.pagination import PaginatedResponse
 from app.api.v1.deps import require_staff_or_admin
 from app.services.audit import record_audit_event
-from app.services.email_templates import payment_receipt_email, payment_refund_email, overdue_reminder_email
+from app.services.email_templates import payment_receipt_email, payment_refund_email, overdue_reminder_email, overdue_reminder_window
 from app.services.outbox import create_outbox_message
 from app.services.payment_adapters import get_payment_adapter
 
@@ -39,7 +40,7 @@ router = APIRouter()
 def _payment_options():
     return (
         selectinload(Payment.invoice).selectinload(Invoice.customer_account),
-        selectinload(Payment.reversal),
+        selectinload(Payment.reversals),
     )
 
 
@@ -56,16 +57,17 @@ def _build_payment_detail(payment: Payment) -> PaymentDetailResponse:
         elif invoice.customer_snapshot:
             customer_name = invoice.customer_snapshot.get("company_name")
 
-    reversal_resp = None
-    if payment.reversal:
-        reversal_resp = PaymentReversalResponse(
-            id=payment.reversal.id,
-            payment_id=payment.reversal.payment_id,
-            reversal_amount=payment.reversal.reversal_amount,
-            reason=payment.reversal.reason,
-            reversed_by_user_id=payment.reversal.reversed_by_user_id,
-            reversed_at=payment.reversal.reversed_at,
+    reversal_responses = [
+        PaymentReversalResponse(
+            id=reversal.id,
+            payment_id=reversal.payment_id,
+            reversal_amount=reversal.reversal_amount,
+            reason=reversal.reason,
+            reversed_by_user_id=reversal.reversed_by_user_id,
+            reversed_at=reversal.reversed_at,
         )
+        for reversal in payment.reversals
+    ]
 
     return PaymentDetailResponse(
         id=payment.id,
@@ -76,7 +78,8 @@ def _build_payment_detail(payment: Payment) -> PaymentDetailResponse:
         reference_note=payment.reference_note,
         is_reversed=payment.is_reversed,
         created_at=payment.created_at,
-        reversal=reversal_resp,
+        reversal=reversal_responses[-1] if reversal_responses else None,
+        reversals=reversal_responses,
         customer_name=customer_name,
         invoice_number=invoice_number,
         currency=currency,
@@ -228,8 +231,6 @@ async def get_collection_queue(
     for inv in overdue_invoices:
         balance = inv.total_amount - inv.paid_amount
         days = (today - inv.due_date).days
-        total_balance += balance
-
         if 1 <= days <= 30:
             b_key = "1-30"
             b_label = "1-30 days"
@@ -242,9 +243,6 @@ async def get_collection_queue(
         else:
             b_key = "90_plus"
             b_label = "90+ days"
-
-        bucket_counts[b_key].count += 1
-        bucket_counts[b_key].amount += balance
 
         cust_name = inv.customer_account.company_name if inv.customer_account else (inv.customer_snapshot or {}).get("company_name", "Customer")
         email = inv.customer_account.billing_email if inv.customer_account else (inv.customer_snapshot or {}).get("billing_email")
@@ -267,6 +265,10 @@ async def get_collection_queue(
                     continue
             elif b_key != ab:
                 continue
+
+        total_balance += balance
+        bucket_counts[b_key].count += 1
+        bucket_counts[b_key].amount += balance
 
         items.append(
             CollectionItemResponse(
@@ -347,7 +349,18 @@ async def send_collection_reminder(
     if payload and payload.custom_message and payload.custom_message.strip():
         body = f"{default_body}\n\nNote from Finance:\n{payload.custom_message.strip()}"
 
-    dedupe_key = f"overdue-reminder:{inv.id}:{today.isoformat()}"
+    days_overdue = (today - inv.due_date).days
+    reminder_window = overdue_reminder_window(days_overdue)
+    dedupe_key = f"overdue-reminder:{inv.id}:{reminder_window}"
+    existing_reminder = (await db.execute(
+        select(OutboxMessage).where(OutboxMessage.dedupe_key == dedupe_key)
+    )).scalar_one_or_none()
+    if existing_reminder:
+        return {
+            "status": existing_reminder.status,
+            "message": f"A reminder for invoice {inv.invoice_number} is already {existing_reminder.status} in this overdue window.",
+            "dedupe_key": dedupe_key,
+        }
     await create_outbox_message(
         db,
         topic="email",
@@ -419,6 +432,7 @@ async def record_payment(
         select(Invoice)
         .where(Invoice.id == payload.invoice_id)
         .options(selectinload(Invoice.customer_account))
+        .with_for_update()
     )
     invoice = (await db.execute(query)).scalar_one_or_none()
 
@@ -553,23 +567,29 @@ async def reverse_payment(
         select(Payment)
         .where(Payment.id == payment_id)
         .options(*_payment_options())
+        .with_for_update()
     )
     payment = (await db.execute(query)).scalar_one_or_none()
 
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found.")
 
-    if payment.is_reversed:
-        raise HTTPException(status_code=400, detail="This payment has already been reversed/refunded.")
+    already_reversed = sum(
+        (Decimal(str(item.reversal_amount)) for item in payment.reversals),
+        Decimal("0.00"),
+    )
+    remaining_reversible = Decimal(str(payment.amount)) - already_reversed
+    if remaining_reversible <= Decimal("0.00"):
+        raise HTTPException(status_code=400, detail="This payment has already been fully reversed/refunded.")
 
-    reversal_amount = payload.amount if payload.amount is not None else payment.amount
+    reversal_amount = payload.amount if payload.amount is not None else remaining_reversible
     if reversal_amount <= Decimal("0.00"):
         raise HTTPException(status_code=400, detail="Reversal amount must be greater than zero.")
 
-    if reversal_amount > payment.amount:
+    if reversal_amount > remaining_reversible:
         raise HTTPException(
             status_code=400,
-            detail=f"Reversal amount ({reversal_amount}) cannot exceed the recorded payment amount ({payment.amount}).",
+            detail=f"Reversal amount ({reversal_amount}) cannot exceed the remaining refundable amount ({remaining_reversible}).",
         )
 
     # Adapter execution
@@ -582,9 +602,6 @@ async def reverse_payment(
     if not adapter_result.success:
         raise HTTPException(status_code=400, detail=f"Reversal processing failed: {adapter_result.message}")
 
-    # Mark payment as reversed
-    payment.is_reversed = True
-
     # Create immutable PaymentReversal record
     reversal = PaymentReversal(
         payment_id=payment.id,
@@ -593,9 +610,16 @@ async def reverse_payment(
         reversed_by_user_id=current_user.id,
     )
     db.add(reversal)
+    await db.flush()
+    payment.is_reversed = already_reversed + reversal_amount >= Decimal(str(payment.amount))
 
     # Adjust invoice paid_amount and status
-    invoice = payment.invoice
+    invoice = (await db.execute(
+        select(Invoice)
+        .where(Invoice.id == payment.invoice_id)
+        .options(selectinload(Invoice.customer_account))
+        .with_for_update()
+    )).scalar_one_or_none()
     if invoice:
         old_paid = invoice.paid_amount
         invoice.paid_amount = max(Decimal("0.00"), invoice.paid_amount - reversal_amount)
@@ -615,6 +639,7 @@ async def reverse_payment(
                 "invoice_id": str(invoice.id),
                 "invoice_number": invoice.invoice_number,
                 "reversal_amount": str(reversal_amount),
+                "remaining_refundable_amount": str(max(Decimal("0.00"), remaining_reversible - reversal_amount)),
                 "reason": payload.reason.strip(),
                 "old_paid_amount": str(old_paid),
                 "new_paid_amount": str(invoice.paid_amount),
@@ -640,7 +665,7 @@ async def reverse_payment(
             await create_outbox_message(
                 db,
                 topic="email",
-                dedupe_key=f"payment-refund:{payment.id}",
+                dedupe_key=f"payment-refund:{reversal.id}",
                 payload={
                     "type": "payment_refund",
                     "payment_id": str(payment.id),

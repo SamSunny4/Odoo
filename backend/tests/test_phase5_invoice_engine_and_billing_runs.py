@@ -11,6 +11,15 @@ from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.outbox import OutboxMessage
 from app.models.audit import AuditEvent
+from app.schemas.billing_run import CommitBatchRequest
+
+
+def test_interactive_billing_commit_has_a_hard_batch_limit():
+    from pydantic import ValidationError
+
+    CommitBatchRequest(approved_item_ids=[uuid.uuid4() for _ in range(50)])
+    with pytest.raises(ValidationError):
+        CommitBatchRequest(approved_item_ids=[uuid.uuid4() for _ in range(51)])
 
 
 @pytest.mark.asyncio

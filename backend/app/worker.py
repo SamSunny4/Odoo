@@ -27,6 +27,7 @@ from app.services.audit import record_audit_event
 from app.services.email_templates import (
     invoice_email,
     overdue_reminder_email,
+    overdue_reminder_window,
     password_reset_email,
     renewal_reminder_email,
 )
@@ -610,11 +611,7 @@ def queue_billing_reminders():
             days_overdue = (today - invoice.due_date).days
             if days_overdue < 1:
                 continue
-            reminder_window = (
-                "initial"
-                if days_overdue <= 6
-                else f"week-{((days_overdue - 7) // 7) + 1}"
-            )
+            reminder_window = overdue_reminder_window(days_overdue)
             recipient = (invoice.customer_snapshot or {}).get("billing_email")
             if not recipient:
                 continue

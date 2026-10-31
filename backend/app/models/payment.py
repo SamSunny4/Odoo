@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import (
     String, Numeric, Date, DateTime, Enum, ForeignKey, Text, Boolean,
     CheckConstraint
@@ -58,10 +58,10 @@ class Payment(Base, UUIDPrimaryKeyMixin):
 
     # Relationships
     invoice: Mapped["Invoice"] = relationship("Invoice", back_populates="payments")
-    reversal: Mapped[Optional["PaymentReversal"]] = relationship(
+    reversals: Mapped[List["PaymentReversal"]] = relationship(
         "PaymentReversal",
         back_populates="payment",
-        uselist=False,
+        order_by="PaymentReversal.reversed_at",
         cascade="all, delete-orphan",
     )
 
@@ -76,7 +76,6 @@ class PaymentReversal(Base, UUIDPrimaryKeyMixin):
     payment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("payments.id", ondelete="RESTRICT"),
-        unique=True,
         nullable=False,
         index=True,
     )
@@ -94,5 +93,5 @@ class PaymentReversal(Base, UUIDPrimaryKeyMixin):
     )
 
     # Relationships
-    payment: Mapped["Payment"] = relationship("Payment", back_populates="reversal")
+    payment: Mapped["Payment"] = relationship("Payment", back_populates="reversals")
 

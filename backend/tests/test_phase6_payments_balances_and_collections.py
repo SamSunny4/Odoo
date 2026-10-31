@@ -242,25 +242,39 @@ async def test_payment_reversal_and_refund_workflow(client: AsyncClient, seed_us
     inv_after_pay = (await client.get(f"/api/v1/invoices/{inv_id}", cookies=admin_cookies)).json()
     assert inv_after_pay["status"] == "paid"
 
-    # Now Reverse / Refund the payment
+    # A partial refund restores only that amount and remains reversible.
     rev_reason = "Customer chargeback claim settled via support ticket #7821"
     rev_res = await client.post(
         f"/api/v1/payments/{payment_id}/reverse",
-        json={"reason": rev_reason},
+        json={"reason": rev_reason, "amount": total / 2},
         cookies=admin_cookies,
     )
     assert rev_res.status_code == 200
     rev_data = rev_res.json()
-    assert rev_data["is_reversed"] is True
+    assert rev_data["is_reversed"] is False
     assert rev_data["reversal"] is not None
     assert rev_data["reversal"]["reason"] == rev_reason
-    assert Decimal(str(rev_data["reversal"]["reversal_amount"])) == Decimal(str(total))
+    assert Decimal(str(rev_data["reversal"]["reversal_amount"])) == Decimal(str(total / 2))
+    assert len(rev_data["reversals"]) == 1
 
-    # Verify invoice status has reverted to CONFIRMED and paid_amount decremented
+    # Verify a partial refund leaves the invoice open with the remaining paid amount.
     inv_after_rev = (await client.get(f"/api/v1/invoices/{inv_id}", cookies=admin_cookies)).json()
     assert inv_after_rev["status"] == "confirmed"
-    assert Decimal(str(inv_after_rev["paid_amount"])) == Decimal("0.00")
-    assert Decimal(str(inv_after_rev["outstanding_balance"])) == Decimal(str(total))
+    assert Decimal(str(inv_after_rev["paid_amount"])) == Decimal(str(total / 2))
+    assert Decimal(str(inv_after_rev["outstanding_balance"])) == Decimal(str(total / 2))
+
+    # Refund the remaining amount as a second immutable record.
+    second_rev = await client.post(
+        f"/api/v1/payments/{payment_id}/reverse",
+        json={"reason": "Remaining balance refunded"},
+        cookies=admin_cookies,
+    )
+    assert second_rev.status_code == 200
+    assert second_rev.json()["is_reversed"] is True
+    assert len(second_rev.json()["reversals"]) == 2
+    inv_after_full_rev = (await client.get(f"/api/v1/invoices/{inv_id}", cookies=admin_cookies)).json()
+    assert Decimal(str(inv_after_full_rev["paid_amount"])) == Decimal("0.00")
+    assert Decimal(str(inv_after_full_rev["outstanding_balance"])) == Decimal(str(total))
 
     # Re-reversing the same payment must fail
     dup_rev_res = await client.post(
@@ -269,7 +283,7 @@ async def test_payment_reversal_and_refund_workflow(client: AsyncClient, seed_us
         cookies=admin_cookies,
     )
     assert dup_rev_res.status_code == 400
-    assert "already been reversed" in dup_rev_res.json()["detail"].lower()
+    assert "fully reversed" in dup_rev_res.json()["detail"].lower()
 
     # Verify audit event was logged
     audit_stmt = select(AuditEvent).where(
@@ -405,7 +419,13 @@ async def test_collection_queue_aging_and_reminders(client: AsyncClient, seed_us
     # 2. Filter collection queue by aging bucket
     bucket_res = await client.get("/api/v1/payments/collection-queue?aging_bucket=31-60", cookies=admin_cookies)
     assert bucket_res.status_code == 200
-    assert any(it["invoice_id"] == str(overdue_inv.id) for it in bucket_res.json()["items"])
+    filtered_queue = bucket_res.json()
+    assert any(it["invoice_id"] == str(overdue_inv.id) for it in filtered_queue["items"])
+    assert filtered_queue["total_overdue_invoices"] == len(filtered_queue["items"])
+    assert Decimal(str(filtered_queue["total_overdue_balance"])) == sum(
+        (Decimal(str(it["balance_due"])) for it in filtered_queue["items"]),
+        Decimal("0.00"),
+    )
 
     # 3. Dispatch Overdue Reminder via outbox
     remind_res = await client.post(
@@ -423,4 +443,14 @@ async def test_collection_queue_aging_and_reminders(client: AsyncClient, seed_us
     assert msg is not None
     assert msg.payload["type"] == "overdue_reminder"
     assert "Immediate payment required" in msg.payload["body"]
+
+    # Manual and scheduled reminders share the same window key, so retries don't duplicate mail.
+    duplicate_reminder = await client.post(
+        f"/api/v1/payments/collection-queue/{overdue_inv.id}/remind",
+        json={"custom_message": "This duplicate must not be sent."},
+        cookies=admin_cookies,
+    )
+    assert duplicate_reminder.status_code == 200
+    assert duplicate_reminder.json()["dedupe_key"] == remind_data["dedupe_key"]
+    assert "already" in duplicate_reminder.json()["message"].lower()
 

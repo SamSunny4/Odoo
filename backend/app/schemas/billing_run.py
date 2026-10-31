@@ -38,7 +38,8 @@ class ControlTowerPreviewResponse(BaseModel):
 
 
 class CommitBatchRequest(BaseModel):
-    approved_item_ids: List[uuid.UUID] = Field(min_length=1)
+    # Keep the interactive commit bounded; large schedules run through the worker.
+    approved_item_ids: List[uuid.UUID] = Field(min_length=1, max_length=50)
 
 
 class CommitBatchResponse(BaseModel):

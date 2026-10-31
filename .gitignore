@@ -35,9 +35,13 @@ Thumbs.db
 .ruff_cache/
 coverage/
 
-# Local databases
+# Local databases & backups
 *.sqlite3
 *.db
+backups/*.dump
+backups/*.sql
+backups/*.json
+!backups/.gitkeep
 
 # Assignment brief and specifications (original reference docs)
 problem statement.txt

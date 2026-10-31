@@ -281,9 +281,12 @@ export const Invoices: React.FC<InvoicesProps> = () => {
   };
 
   const handleOpenReversal = (payment: PaymentApiItem) => {
+    const reversed = (payment.reversals || (payment.reversal ? [payment.reversal] : []))
+      .reduce((sum, item) => sum + Number(item.reversal_amount), 0);
+    const remaining = Math.max(0, Number(payment.amount) - reversed);
     setReversalModalPayment(payment);
     setReversalReason('');
-    setReversalAmount(Number(payment.amount).toFixed(2));
+    setReversalAmount(remaining.toFixed(2));
     setReversalError(null);
   };
 
@@ -803,6 +806,11 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                                 <RotateCcw className="w-3 h-3" />
                                 Reversed
                               </span>
+                            ) : p.reversals?.length || p.reversal ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                                <RotateCcw className="w-3 h-3" />
+                                Partially refunded
+                              </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
                                 <CheckCircle2 className="w-3 h-3" />
@@ -812,11 +820,11 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                           </td>
                           <td className="py-3.5 px-4 text-xs text-slate-500 max-w-xs truncate">
                             {p.reference_note || '—'}
-                            {p.reversal && (
-                              <span className="block text-red-600 font-medium">
-                                Reversal reason: {p.reversal.reason}
+                            {(p.reversals || (p.reversal ? [p.reversal] : [])).map((reversal) => (
+                              <span key={reversal.id} className="block text-red-600 font-medium">
+                                Refund ${Number(reversal.reversal_amount).toFixed(2)}: {reversal.reason}
                               </span>
-                            )}
+                            ))}
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             {!p.is_reversed ? (
@@ -1499,7 +1507,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
             )}
 
             <p className="text-xs text-slate-600">
-              This action creates an immutable reversal record, voids the payment, and restores the invoice’s outstanding balance. Settled invoices will return to confirmed open status.
+              This action adds an immutable refund record and restores that amount to the invoice balance. You can record multiple partial refunds until the payment is fully reversed.
             </p>
 
             <div>
@@ -1511,7 +1519,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                 type="number"
                 step="0.01"
                 min="0.01"
-                max={Number(reversalModalPayment.amount)}
+                max={Math.max(0, Number(reversalModalPayment.amount) - (reversalModalPayment.reversals || (reversalModalPayment.reversal ? [reversalModalPayment.reversal] : [])).reduce((sum, item) => sum + Number(item.reversal_amount), 0))}
                 required
                 value={reversalAmount}
                 onChange={(e) => setReversalAmount(e.target.value)}

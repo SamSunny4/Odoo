@@ -39,6 +39,15 @@ class ProductCreate(BaseModel):
     is_active: bool = True
     variants: Optional[List[ProductVariantCreate]] = None
 
+    @model_validator(mode="after")
+    def validate_variant_prices(self):
+        if self.variants and any(
+            self.sales_price + variant.price_adjustment < 0
+            for variant in self.variants
+        ):
+            raise ValueError("A variant price adjustment cannot make the product price negative.")
+        return self
+
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -97,15 +106,6 @@ class PlanUpdate(BaseModel):
     allow_pause: Optional[bool] = None
     allow_renewal: Optional[bool] = None
     is_active: Optional[bool] = None
-
-    @model_validator(mode="after")
-    def validate_plan_policies(self):
-        if self.available_from and self.available_to and self.available_from > self.available_to:
-            raise ValueError("available_from date cannot be after available_to date")
-        if self.allow_renewal is False and self.auto_close_on_expiry is False:
-            raise ValueError("Incompatible policies: plan must either allow renewal or enable auto-close upon expiry.")
-        return self
-
 
 class PlanResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

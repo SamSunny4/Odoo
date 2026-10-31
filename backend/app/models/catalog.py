@@ -11,6 +11,7 @@ from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 class ProductType(str, enum.Enum):
     SERVICE = "service"
     GOODS = "goods"
+    CONSUMABLE = "consumable"
 
 
 class Product(Base, UUIDPrimaryKeyMixin, TimestampMixin):

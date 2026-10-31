@@ -101,8 +101,8 @@ export interface UpdatePlanPayload {
   cadence?: string;
   base_price?: number | string;
   min_quantity?: number;
-  available_from?: string;
-  available_to?: string;
+  available_from?: string | null;
+  available_to?: string | null;
   auto_close_on_expiry?: boolean;
   allow_early_close?: boolean;
   allow_pause?: boolean;
@@ -170,7 +170,7 @@ export interface UpdateDiscountRulePayload {
   target_product_id?: string;
   min_spend?: number | string;
   min_quantity?: number;
-  max_usage_limit?: number;
+  max_usage_limit?: number | null;
   valid_from?: string;
   valid_to?: string;
   is_active?: boolean;

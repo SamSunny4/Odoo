@@ -1,7 +1,7 @@
 import asyncio
 import smtplib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 
 from celery import Celery
@@ -17,9 +17,11 @@ from app.core.crypto import decrypt_secret
 from app.models.billing_run import BillingRunItemStatus
 from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.subscription import Subscription, SubscriptionStatus
+from app.models.plan import Plan
 from app.models.user import User, UserRole
 from app.models.outbox import OutboxMessage, OutboxMessageStatus
 from app.services.billing import create_billing_preview, commit_billing_preview
+from app.services.audit import record_audit_event
 
 celery_app = Celery(
     "brightloop_worker",
@@ -69,7 +71,46 @@ def send_invoice_email(self, invoice_id: str, recipient_email: str):
             raise self.retry(exc=exc, countdown=60)
 
 
-async def _run_due_billing() -> tuple[int, list[tuple[str, str]]]:
+async def _close_expired_subscriptions(
+    session: AsyncSession,
+    *,
+    today: date,
+    actor_user_id: uuid.UUID,
+) -> int:
+    """Apply plan auto-close policy to active subscriptions past their expiry date."""
+    expired = (await session.execute(
+        select(Subscription)
+        .join(Plan, Plan.id == Subscription.plan_id)
+        .where(
+            Subscription.status.in_([SubscriptionStatus.ACTIVE, SubscriptionStatus.PAUSED]),
+            Subscription.expiry_date.is_not(None),
+            Subscription.expiry_date < today,
+            Plan.auto_close_on_expiry.is_(True),
+        )
+        .with_for_update(skip_locked=True)
+    )).scalars().all()
+
+    for subscription in expired:
+        previous_status = subscription.status
+        subscription.status = SubscriptionStatus.CLOSED
+        await record_audit_event(
+            session,
+            entity_type="subscription",
+            entity_id=subscription.id,
+            action="AUTO_CLOSE_ON_EXPIRY",
+            actor_user_id=actor_user_id,
+            changes={
+                "subscription_number": subscription.subscription_number,
+                "status": {"from": previous_status.value, "to": SubscriptionStatus.CLOSED.value},
+                "expiry_date": subscription.expiry_date.isoformat(),
+            },
+        )
+    if expired:
+        await session.commit()
+    return len(expired)
+
+
+async def _run_due_billing() -> tuple[int, list[tuple[str, str]], int]:
     """Create and commit a preview using the same calculation path as the admin UI."""
     async_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
@@ -82,6 +123,11 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]]]:
                 raise RuntimeError("Recurring billing requires an active seeded admin account.")
 
             today = organization_today()
+            auto_closed_count = await _close_expired_subscriptions(
+                session,
+                today=today,
+                actor_user_id=admin.id,
+            )
             due_count = await session.scalar(
                 select(func.count(Subscription.id)).where(
                     Subscription.status == SubscriptionStatus.ACTIVE,
@@ -89,7 +135,7 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]]]:
                 )
             )
             if not due_count:
-                return 0, []
+                return 0, [], auto_closed_count
             run, rows = await create_billing_preview(
                 session,
                 actor_user_id=admin.id,
@@ -112,7 +158,7 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]]]:
                 for invoice in invoices
                 if invoice.customer_snapshot.get("billing_email")
             ]
-            return len(invoices), deliveries
+            return len(invoices), deliveries, auto_closed_count
     finally:
         await async_engine.dispose()
 
@@ -120,10 +166,15 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]]]:
 @celery_app.task(name="tasks.generate_recurring_invoices")
 def generate_recurring_invoices():
     """Automatically bill due clean subscriptions through the shared billing engine."""
-    invoices_created, deliveries = asyncio.run(_run_due_billing())
+    invoices_created, deliveries, auto_closed_count = asyncio.run(_run_due_billing())
     for invoice_id, recipient in deliveries:
         send_invoice_email.delay(invoice_id, recipient)
-    return {"status": "completed", "invoices_created": invoices_created, "emails_queued": len(deliveries)}
+    return {
+        "status": "completed",
+        "invoices_created": invoices_created,
+        "emails_queued": len(deliveries),
+        "subscriptions_auto_closed": auto_closed_count,
+    }
 
 
 @celery_app.task(name="tasks.check_overdue_invoices")

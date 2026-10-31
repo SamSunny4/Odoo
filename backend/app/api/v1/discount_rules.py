@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, func
@@ -266,39 +267,96 @@ async def update_discount_rule(
     if not rule:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discount rule not found.")
 
+    supplied = payload.model_fields_set
+    nullable_fields = {"target_product_id", "max_usage_limit"}
+    for field_name in supplied - nullable_fields:
+        if getattr(payload, field_name) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} cannot be null.",
+            )
+
+    proposed_type = payload.discount_type if "discount_type" in supplied else rule.discount_type
+    proposed_value = payload.value if "value" in supplied else rule.value
+    proposed_scope = payload.scope if "scope" in supplied else rule.scope
+    proposed_target = (
+        payload.target_product_id if "target_product_id" in supplied else rule.target_product_id
+    )
+    if proposed_scope == DiscountScope.SUBSCRIPTION:
+        proposed_target = None
+    elif proposed_target is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="target_product_id is required for a product-scoped discount.",
+        )
+
+    proposed_from = payload.valid_from if "valid_from" in supplied else rule.valid_from
+    proposed_to = payload.valid_to if "valid_to" in supplied else rule.valid_to
+    if proposed_from > proposed_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="valid_from date cannot be after valid_to date.",
+        )
+    if proposed_type == DiscountType.PERCENTAGE and proposed_value > 100:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Percentage discount value cannot exceed 100%.",
+        )
+
+    if proposed_scope == DiscountScope.PRODUCT and proposed_target:
+        target_product = (
+            await db.execute(select(Product).where(Product.id == proposed_target))
+        ).scalar_one_or_none()
+        if not target_product:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target product not found.")
+        if not target_product.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An archived product cannot be targeted by a new or updated discount.",
+            )
+
     changes = {}
-    if payload.name is not None and payload.name.strip() != rule.name:
-        changes["name"] = {"from": rule.name, "to": payload.name.strip()}
-        rule.name = payload.name.strip()
+    for field_name in supplied:
+        new_value = getattr(payload, field_name)
+        if field_name == "name":
+            new_value = new_value.strip()
+            if not new_value:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="name cannot be blank.",
+                )
+        if field_name == "target_product_id":
+            new_value = proposed_target
+        old_value = getattr(rule, field_name)
+        if old_value == new_value:
+            continue
+        audit_old = old_value.value if hasattr(old_value, "value") else old_value
+        audit_new = new_value.value if hasattr(new_value, "value") else new_value
+        if isinstance(audit_old, (DiscountType, DiscountScope)):
+            audit_old = audit_old.value
+        if isinstance(audit_new, (DiscountType, DiscountScope)):
+            audit_new = audit_new.value
+        if hasattr(audit_old, "isoformat"):
+            audit_old = audit_old.isoformat()
+        if hasattr(audit_new, "isoformat"):
+            audit_new = audit_new.isoformat()
+        if isinstance(audit_old, Decimal):
+            audit_old = str(audit_old)
+        if isinstance(audit_new, Decimal):
+            audit_new = str(audit_new)
+        if isinstance(audit_old, uuid.UUID):
+            audit_old = str(audit_old)
+        if isinstance(audit_new, uuid.UUID):
+            audit_new = str(audit_new)
+        changes[field_name] = {"from": audit_old, "to": audit_new}
+        setattr(rule, field_name, new_value)
 
-    if payload.discount_type is not None and payload.discount_type != rule.discount_type:
-        changes["discount_type"] = {"from": rule.discount_type.value, "to": payload.discount_type.value}
-        rule.discount_type = payload.discount_type
-
-    if payload.value is not None and payload.value != rule.value:
-        changes["value"] = {"from": str(rule.value), "to": str(payload.value)}
-        rule.value = payload.value
-
-    if payload.scope is not None and payload.scope != rule.scope:
-        changes["scope"] = {"from": rule.scope.value, "to": payload.scope.value}
-        rule.scope = payload.scope
-
-    if payload.target_product_id is not None:
-        rule.target_product_id = payload.target_product_id
-
-    if payload.min_spend is not None:
-        rule.min_spend = payload.min_spend
-    if payload.min_quantity is not None:
-        rule.min_quantity = payload.min_quantity
-    if payload.max_usage_limit is not None:
-        rule.max_usage_limit = payload.max_usage_limit
-    if payload.valid_from is not None:
-        rule.valid_from = payload.valid_from
-    if payload.valid_to is not None:
-        rule.valid_to = payload.valid_to
-    if payload.is_active is not None and payload.is_active != rule.is_active:
-        changes["is_active"] = {"from": rule.is_active, "to": payload.is_active}
-        rule.is_active = payload.is_active
+    # Switching to subscription scope clears a stale product target even when the
+    # client only sends `scope`.
+    if proposed_scope == DiscountScope.SUBSCRIPTION and rule.target_product_id is not None:
+        old_target = rule.target_product_id
+        rule.target_product_id = None
+        changes["target_product_id"] = {"from": str(old_target), "to": None}
 
     if changes:
         await record_audit_event(

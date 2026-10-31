@@ -268,7 +268,7 @@ export const DiscountsAdmin: React.FC<DiscountsAdminProps> = ({ onNavigate }) =>
           target_product_id: discountForm.target_product_id || undefined,
           min_spend: discountForm.min_spend,
           min_quantity: discountForm.min_quantity,
-          max_usage_limit: discountForm.max_usage_limit ? parseInt(discountForm.max_usage_limit) : undefined,
+          max_usage_limit: discountForm.max_usage_limit ? parseInt(discountForm.max_usage_limit) : null,
           valid_from: discountForm.valid_from,
           valid_to: discountForm.valid_to,
         };

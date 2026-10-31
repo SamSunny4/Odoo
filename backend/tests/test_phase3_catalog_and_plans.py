@@ -3,11 +3,15 @@ from datetime import date, timedelta
 from decimal import Decimal
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from tests.conftest import auth_cookies
 from app.models.catalog import ProductType
 from app.models.plan import BillingCadence
 from app.models.discount import DiscountType, DiscountScope
+from app.models.subscription import Subscription, SubscriptionStatus
+from app.models.audit import AuditEvent
+from app.worker import _close_expired_subscriptions
 
 
 @pytest.mark.asyncio
@@ -19,6 +23,19 @@ async def test_product_crud_and_cost_price_redaction(client: AsyncClient, seed_u
     admin_cookies = auth_cookies(admin)
     staff_cookies = auth_cookies(staff)
     customer_cookies = auth_cookies(customer)
+
+    invalid_variant_price = await client.post(
+        "/api/v1/products",
+        json={
+            "name": "Invalid Variant Product",
+            "type": "goods",
+            "sales_price": "10.00",
+            "cost_price": "5.00",
+            "variants": [{"name": "Below Zero", "price_adjustment": "-11.00"}],
+        },
+        cookies=auth_cookies(admin),
+    )
+    assert invalid_variant_price.status_code == 422
 
     # 1. Non-admin forbidden to create product
     res = await client.post(
@@ -80,6 +97,23 @@ async def test_product_crud_and_cost_price_redaction(client: AsyncClient, seed_u
 
 
 @pytest.mark.asyncio
+async def test_consumable_product_type_from_admin_catalog(client: AsyncClient, seed_users):
+    admin_cookies = auth_cookies(seed_users["admin"])
+    res = await client.post(
+        "/api/v1/products",
+        json={
+            "name": "Provisioned Storage",
+            "type": "consumable",
+            "sales_price": "12.00",
+            "cost_price": "4.00",
+        },
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 201
+    assert res.json()["type"] == "consumable"
+
+
+@pytest.mark.asyncio
 async def test_product_variants_and_price_adjustments(client: AsyncClient, seed_users):
     admin = seed_users["admin"]
     product = seed_users["product"]
@@ -125,6 +159,44 @@ async def test_product_variants_and_price_adjustments(client: AsyncClient, seed_
     assert res.status_code == 200
     variants = res.json()
     assert len(variants) == 2
+
+
+@pytest.mark.asyncio
+async def test_variant_price_floor_is_enforced_when_catalog_prices_change(client: AsyncClient, seed_users):
+    admin = seed_users["admin"]
+    product = seed_users["product"]
+    admin_cookies = auth_cookies(admin)
+
+    variant = await client.post(
+        f"/api/v1/products/{product.id}/variants",
+        json={"name": "Discounted Edition", "price_adjustment": "-50.00"},
+        cookies=admin_cookies,
+    )
+    assert variant.status_code == 201
+
+    lower_base = await client.patch(
+        f"/api/v1/products/{product.id}",
+        json={"sales_price": "40.00"},
+        cookies=admin_cookies,
+    )
+    assert lower_base.status_code == 422
+
+    archived = await client.delete(
+        f"/api/v1/products/{product.id}/variants/{variant.json()['id']}",
+        cookies=admin_cookies,
+    )
+    assert archived.status_code == 200
+    preview = await client.post(
+        "/api/v1/catalog/calculate-preview",
+        json={
+            "product_lines": [{
+                "product_id": str(product.id),
+                "variant_id": variant.json()["id"],
+            }],
+        },
+        cookies=admin_cookies,
+    )
+    assert preview.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -203,6 +275,94 @@ async def test_plan_crud_and_cadence_policies(client: AsyncClient, seed_users):
     res = await client.delete(f"/api/v1/plans/{plan_id}", cookies=admin_cookies)
     assert res.status_code == 200
     assert res.json()["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_plan_policy_only_updates_persist_and_validate_merged_state(client: AsyncClient, seed_users):
+    admin = seed_users["admin"]
+    plan = seed_users["plan"]
+    admin_cookies = auth_cookies(admin)
+    today = date.today()
+    next_month = today + timedelta(days=30)
+
+    # Policy-only PATCH must persist even when there are no name/price changes.
+    res = await client.patch(
+        f"/api/v1/plans/{plan.id}",
+        json={
+            "available_to": next_month.isoformat(),
+            "allow_pause": False,
+        },
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 200
+    assert res.json()["available_to"] == next_month.isoformat()
+    assert res.json()["allow_pause"] is False
+
+    # A partial update must be checked against the existing date range.
+    res = await client.patch(
+        f"/api/v1/plans/{plan.id}",
+        json={"available_from": (next_month + timedelta(days=1)).isoformat()},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 422
+
+    # Explicit null clears an optional availability boundary.
+    res = await client.patch(
+        f"/api/v1/plans/{plan.id}",
+        json={"available_to": None},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 200
+    assert res.json()["available_to"] is None
+
+
+@pytest.mark.asyncio
+async def test_expired_auto_close_plan_subscriptions_are_closed_and_audited(db_session, seed_users):
+    admin = seed_users["admin"]
+    account = seed_users["account_a"]
+    plan = seed_users["plan"]
+    plan.auto_close_on_expiry = True
+    db_session.add_all([
+        Subscription(
+            subscription_number="SUB-AUTO-CLOSE-1",
+            customer_account_id=account.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            start_date=date.today() - timedelta(days=60),
+            expiry_date=date.today() - timedelta(days=1),
+        ),
+        Subscription(
+            subscription_number="SUB-AUTO-CLOSE-2",
+            customer_account_id=account.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            start_date=date.today() - timedelta(days=30),
+            expiry_date=date.today(),
+        ),
+    ])
+    await db_session.commit()
+
+    closed_count = await _close_expired_subscriptions(
+        db_session,
+        today=date.today(),
+        actor_user_id=admin.id,
+    )
+
+    expired = (await db_session.execute(
+        select(Subscription).where(
+            Subscription.subscription_number.like("SUB-AUTO-CLOSE-%")
+        )
+    )).scalars().all()
+    assert closed_count == 1
+    assert next(s for s in expired if s.subscription_number.endswith("1")).status == SubscriptionStatus.CLOSED
+    assert next(s for s in expired if s.subscription_number.endswith("2")).status == SubscriptionStatus.ACTIVE
+    audit = (await db_session.execute(
+        select(AuditEvent).where(
+            AuditEvent.entity_id == next(s for s in expired if s.subscription_number.endswith("1")).id,
+            AuditEvent.action == "AUTO_CLOSE_ON_EXPIRY",
+        )
+    )).scalar_one()
+    assert audit.actor_user_id == admin.id
 
 
 @pytest.mark.asyncio
@@ -361,6 +521,176 @@ async def test_discount_rules_admin_only_and_caps(client: AsyncClient, seed_user
     assert res.status_code == 200
     assert res.json()["value"] == "25.00"
     assert res.json()["max_usage_limit"] == 100
+
+
+@pytest.mark.asyncio
+async def test_discount_partial_updates_persist_and_validate_merged_state(client: AsyncClient, seed_users):
+    admin_cookies = auth_cookies(seed_users["admin"])
+    today = date.today()
+    next_month = today + timedelta(days=30)
+    res = await client.post(
+        "/api/v1/discount-rules",
+        json={
+            "name": "Partial Update Promo",
+            "discount_type": "percentage",
+            "value": "20.00",
+            "valid_from": today.isoformat(),
+            "valid_to": next_month.isoformat(),
+            "max_usage_limit": 80,
+        },
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 201
+    discount_id = res.json()["id"]
+
+    # Changes to fields that do not affect the discount's name/value must still commit.
+    res = await client.patch(
+        f"/api/v1/discount-rules/{discount_id}",
+        json={"min_spend": "300.00", "min_quantity": 4, "max_usage_limit": None},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 200
+    assert res.json()["min_spend"] == "300.00"
+    assert res.json()["min_quantity"] == 4
+    assert res.json()["max_usage_limit"] is None
+
+    # Validate the complete existing rule plus the partial request.
+    res = await client.patch(
+        f"/api/v1/discount-rules/{discount_id}",
+        json={"value": "120.00"},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 422
+    res = await client.patch(
+        f"/api/v1/discount-rules/{discount_id}",
+        json={"valid_from": (next_month + timedelta(days=1)).isoformat()},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 422
+    res = await client.patch(
+        f"/api/v1/discount-rules/{discount_id}",
+        json={"scope": "product"},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 422
+
+    product_id = str(seed_users["product"].id)
+    res = await client.patch(
+        f"/api/v1/discount-rules/{discount_id}",
+        json={"scope": "product", "target_product_id": product_id},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 200
+    assert res.json()["target_product_id"] == product_id
+
+    res = await client.patch(
+        f"/api/v1/discount-rules/{discount_id}",
+        json={"scope": "subscription"},
+        cookies=admin_cookies,
+    )
+    assert res.status_code == 200
+    assert res.json()["scope"] == "subscription"
+    assert res.json()["target_product_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_product_scoped_discount_only_applies_to_target_product(client: AsyncClient, seed_users):
+    admin_cookies = auth_cookies(seed_users["admin"])
+    product_a = seed_users["product"]
+    plan = seed_users["plan"]
+    today = date.today()
+    next_year = today + timedelta(days=365)
+
+    product_b_response = await client.post(
+        "/api/v1/products",
+        json={
+            "name": "Analytics Add-on",
+            "type": "service",
+            "sales_price": "200.00",
+            "cost_price": "50.00",
+        },
+        cookies=admin_cookies,
+    )
+    assert product_b_response.status_code == 201
+    product_b = product_b_response.json()
+
+    discount_response = await client.post(
+        "/api/v1/discount-rules",
+        json={
+            "name": "Targeted Core Discount",
+            "discount_type": "percentage",
+            "value": "10.00",
+            "scope": "product",
+            "target_product_id": str(product_a.id),
+            "valid_from": today.isoformat(),
+            "valid_to": next_year.isoformat(),
+        },
+        cookies=admin_cookies,
+    )
+    assert discount_response.status_code == 201
+
+    preview = await client.post(
+        "/api/v1/catalog/calculate-preview",
+        json={
+            "plan_id": str(plan.id),
+            "product_lines": [
+                {"product_id": str(product_a.id), "quantity": 1},
+                {"product_id": product_b["id"], "quantity": 1},
+            ],
+            "discount_rule_id": discount_response.json()["id"],
+        },
+        cookies=admin_cookies,
+    )
+    assert preview.status_code == 200
+    data = preview.json()
+    assert data["subtotal"] == "500.00"
+    assert data["discount_amount"] == "10.00"
+    assert data["total_amount"] == "490.00"
+    line_a = next(line for line in data["lines"] if line["product_name"] == product_a.name)
+    line_b = next(line for line in data["lines"] if line["product_name"] == "Analytics Add-on")
+    plan_line = next(line for line in data["lines"] if line["product_name"] == plan.name)
+    assert line_a["discount_amount"] == "10.00"
+    assert line_b["discount_amount"] == "0.00"
+    assert plan_line["discount_amount"] == "0.00"
+
+
+@pytest.mark.asyncio
+async def test_price_preview_rejects_archived_items_and_wrong_variants(client: AsyncClient, seed_users):
+    admin_cookies = auth_cookies(seed_users["admin"])
+    product = seed_users["product"]
+    plan = seed_users["plan"]
+    variant = await client.post(
+        f"/api/v1/products/{product.id}/variants",
+        json={"name": "Standard", "price_adjustment": "0.00"},
+        cookies=admin_cookies,
+    )
+    assert variant.status_code == 201
+
+    product_b_response = await client.post(
+        "/api/v1/products",
+        json={"name": "Other Product", "type": "goods", "sales_price": "10.00", "cost_price": "4.00"},
+        cookies=admin_cookies,
+    )
+    assert product_b_response.status_code == 201
+    product_b_id = product_b_response.json()["id"]
+
+    wrong_variant = await client.post(
+        "/api/v1/catalog/calculate-preview",
+        json={
+            "plan_id": str(plan.id),
+            "product_lines": [{"product_id": product_b_id, "variant_id": variant.json()["id"]}],
+        },
+        cookies=admin_cookies,
+    )
+    assert wrong_variant.status_code == 404
+
+    await client.delete(f"/api/v1/products/{product.id}", cookies=admin_cookies)
+    archived_product = await client.post(
+        "/api/v1/catalog/calculate-preview",
+        json={"product_lines": [{"product_id": str(product.id)}]},
+        cookies=admin_cookies,
+    )
+    assert archived_product.status_code == 409
 
 
 @pytest.mark.asyncio

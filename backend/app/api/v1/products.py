@@ -239,6 +239,17 @@ async def update_product(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
 
+    if payload.sales_price is not None:
+        if any(
+            variant.is_active
+            and payload.sales_price + Decimal(str(variant.price_adjustment)) < 0
+            for variant in product.variants
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The new sales price would make an active variant price negative.",
+            )
+
     changes = {}
     if payload.name is not None and payload.name.strip() != product.name:
         changes["name"] = {"from": product.name, "to": payload.name.strip()}
@@ -348,6 +359,11 @@ async def create_product_variant(
     product = (await db.execute(select(Product).where(Product.id == product_id))).scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
+    if Decimal(str(product.sales_price)) + payload.price_adjustment < 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A variant price adjustment cannot make the product price negative.",
+        )
 
     variant = ProductVariant(
         product_id=product_id,
@@ -401,6 +417,16 @@ async def update_product_variant(
     variant = (await db.execute(query)).scalar_one_or_none()
     if not variant:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant not found.")
+
+    if payload.price_adjustment is not None:
+        product = (await db.execute(select(Product).where(Product.id == product_id))).scalar_one_or_none()
+        if not product:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
+        if Decimal(str(product.sales_price)) + payload.price_adjustment < 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A variant price adjustment cannot make the product price negative.",
+            )
 
     changes = {}
     if payload.name is not None and payload.name.strip() != variant.name:
@@ -614,40 +640,59 @@ async def update_plan(
     if not plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found.")
 
+    supplied = payload.model_fields_set
+    nullable_fields = {"available_from", "available_to"}
+    for field_name in supplied - nullable_fields:
+        if getattr(payload, field_name) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field_name} cannot be null.",
+            )
+
+    proposed_from = payload.available_from if "available_from" in supplied else plan.available_from
+    proposed_to = payload.available_to if "available_to" in supplied else plan.available_to
+    proposed_auto_close = (
+        payload.auto_close_on_expiry
+        if "auto_close_on_expiry" in supplied
+        else plan.auto_close_on_expiry
+    )
+    proposed_renewal = payload.allow_renewal if "allow_renewal" in supplied else plan.allow_renewal
+    if proposed_from and proposed_to and proposed_from > proposed_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="available_from date cannot be after available_to date.",
+        )
+    if not proposed_renewal and not proposed_auto_close:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A plan that disallows renewal must automatically close on expiry.",
+        )
+
     changes = {}
-    if payload.name is not None and payload.name.strip() != plan.name:
-        changes["name"] = {"from": plan.name, "to": payload.name.strip()}
-        plan.name = payload.name.strip()
-
-    if payload.cadence is not None and payload.cadence != plan.cadence:
-        changes["cadence"] = {"from": plan.cadence.value, "to": payload.cadence.value}
-        plan.cadence = payload.cadence
-
-    if payload.base_price is not None and payload.base_price != plan.base_price:
-        changes["base_price"] = {"from": str(plan.base_price), "to": str(payload.base_price)}
-        plan.base_price = payload.base_price
-
-    if payload.min_quantity is not None and payload.min_quantity != plan.min_quantity:
-        changes["min_quantity"] = {"from": plan.min_quantity, "to": payload.min_quantity}
-        plan.min_quantity = payload.min_quantity
-
-    if payload.available_from is not None:
-        plan.available_from = payload.available_from
-    if payload.available_to is not None:
-        plan.available_to = payload.available_to
-
-    if payload.auto_close_on_expiry is not None:
-        plan.auto_close_on_expiry = payload.auto_close_on_expiry
-    if payload.allow_early_close is not None:
-        plan.allow_early_close = payload.allow_early_close
-    if payload.allow_pause is not None:
-        plan.allow_pause = payload.allow_pause
-    if payload.allow_renewal is not None:
-        plan.allow_renewal = payload.allow_renewal
-
-    if payload.is_active is not None and payload.is_active != plan.is_active:
-        changes["is_active"] = {"from": plan.is_active, "to": payload.is_active}
-        plan.is_active = payload.is_active
+    for field_name in supplied:
+        new_value = getattr(payload, field_name)
+        old_value = getattr(plan, field_name)
+        if field_name == "name":
+            new_value = new_value.strip()
+            if not new_value:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="name cannot be blank.",
+                )
+        if new_value == old_value:
+            continue
+        audit_old = old_value.value if hasattr(old_value, "value") else old_value
+        audit_new = new_value.value if hasattr(new_value, "value") else new_value
+        if isinstance(audit_old, (date,)):
+            audit_old = audit_old.isoformat()
+        if isinstance(audit_new, (date,)):
+            audit_new = audit_new.isoformat()
+        if isinstance(audit_old, Decimal):
+            audit_old = str(audit_old)
+        if isinstance(audit_new, Decimal):
+            audit_new = str(audit_new)
+        changes[field_name] = {"from": audit_old, "to": audit_new}
+        setattr(plan, field_name, new_value)
 
     if changes:
         await record_audit_event(
@@ -709,6 +754,9 @@ async def calculate_preview(
     as_of = payload.as_of or date.today()
     warnings = []
     lines_output: List[CalculatePreviewLineResponse] = []
+    line_product_ids: List[Optional[uuid.UUID]] = []
+    line_tax_rule_ids: List[Optional[uuid.UUID]] = []
+    line_quantities: List[int] = []
 
     plan_name = None
     plan_base_price = Decimal("0.00")
@@ -716,38 +764,56 @@ async def calculate_preview(
     # 1. Plan line (if selected)
     if payload.plan_id:
         plan_obj = (await db.execute(select(Plan).where(Plan.id == payload.plan_id))).scalar_one_or_none()
-        if plan_obj:
-            plan_name = plan_obj.name
-            plan_base_price = _money(Decimal(str(plan_obj.base_price)))
-            if not plan_obj.is_active:
-                warnings.append("The selected plan is currently archived/inactive.")
-            if plan_obj.available_from and as_of < plan_obj.available_from:
-                warnings.append(f"Plan is not yet available (starts {plan_obj.available_from}).")
-            if plan_obj.available_to and as_of > plan_obj.available_to:
-                warnings.append(f"Plan availability expired on {plan_obj.available_to}.")
-
-            lines_output.append(
-                CalculatePreviewLineResponse(
-                    description=f"Plan Base Fee — {plan_obj.name}",
-                    product_name=plan_obj.name,
-                    variant_name=None,
-                    price_adjustment=Decimal("0.00"),
-                    unit_price=plan_base_price,
-                    quantity=1,
-                    subtotal=plan_base_price,
-                    discount_amount=Decimal("0.00"),
-                    tax_rate=Decimal("0.00"),
-                    tax_amount=Decimal("0.00"),
-                    line_total=plan_base_price,
-                )
+        if not plan_obj:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan not found.")
+        if not plan_obj.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The selected plan is archived and unavailable for new sales.",
             )
+        if plan_obj.available_from and as_of < plan_obj.available_from:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Plan is not yet available (starts {plan_obj.available_from}).",
+            )
+        if plan_obj.available_to and as_of > plan_obj.available_to:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Plan availability expired on {plan_obj.available_to}.",
+            )
+
+        plan_name = plan_obj.name
+        plan_base_price = _money(Decimal(str(plan_obj.base_price)))
+        lines_output.append(
+            CalculatePreviewLineResponse(
+                description=f"Plan Base Fee — {plan_obj.name}",
+                product_name=plan_obj.name,
+                variant_name=None,
+                price_adjustment=Decimal("0.00"),
+                unit_price=plan_base_price,
+                quantity=1,
+                subtotal=plan_base_price,
+                discount_amount=Decimal("0.00"),
+                tax_rate=Decimal("0.00"),
+                tax_amount=Decimal("0.00"),
+                line_total=plan_base_price,
+            )
+        )
+        line_product_ids.append(None)
+        line_tax_rule_ids.append(payload.default_tax_rule_id)
+        line_quantities.append(0)
 
     # 2. Product lines with variant price adjustments
     total_qty = 0
     for req_line in payload.product_lines:
         prod = (await db.execute(select(Product).where(Product.id == req_line.product_id))).scalar_one_or_none()
         if not prod:
-            continue
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
+        if not prod.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Product '{prod.name}' is archived and unavailable for new sales.",
+            )
 
         base_unit = Decimal(str(prod.sales_price))
         adjustment = Decimal("0.00")
@@ -762,11 +828,25 @@ async def calculate_preview(
                     )
                 )
             ).scalar_one_or_none()
-            if variant:
-                adjustment = Decimal(str(variant.price_adjustment))
-                variant_name = variant.name
+            if not variant:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Variant {req_line.variant_id} does not belong to product '{prod.name}'.",
+                )
+            if not variant.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Variant '{variant.name}' is archived and unavailable for new sales.",
+                )
+            adjustment = Decimal(str(variant.price_adjustment))
+            variant_name = variant.name
 
         unit_price = _money(base_unit + adjustment)
+        if unit_price < 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"The selected variant makes '{prod.name}' price negative.",
+            )
         qty = req_line.quantity
         subtotal = _money(unit_price * qty)
         total_qty += qty
@@ -788,8 +868,13 @@ async def calculate_preview(
                 line_total=subtotal,
             )
         )
+        line_product_ids.append(prod.id)
+        line_tax_rule_ids.append(req_line.tax_rule_id or payload.default_tax_rule_id)
+        line_quantities.append(qty)
 
     gross_subtotal = sum((l.subtotal for l in lines_output), Decimal("0.00"))
+    if payload.plan_id and plan_obj and total_qty < plan_obj.min_quantity:
+        warnings.append(f"Quantity {total_qty} is below the plan minimum of {plan_obj.min_quantity}.")
 
     # 3. Discount evaluation
     discount_amount = Decimal("0.00")
@@ -800,76 +885,67 @@ async def calculate_preview(
             await db.execute(select(DiscountRule).where(DiscountRule.id == payload.discount_rule_id))
         ).scalar_one_or_none()
 
-        if disc:
-            discount_name = disc.name
-            if not disc.is_active:
-                warnings.append(f"Discount '{disc.name}' is currently inactive.")
-            elif not (disc.valid_from <= as_of <= disc.valid_to):
-                warnings.append(f"Discount '{disc.name}' is outside its active validity window ({disc.valid_from} to {disc.valid_to}).")
-            else:
-                # Check redemptions count
-                redemptions_query = select(func.count(DiscountRedemption.id)).where(
+        if not disc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discount rule not found.")
+        discount_name = disc.name
+        eligible_indices: List[int] = []
+        if disc.scope == DiscountScope.SUBSCRIPTION:
+            eligible_indices = list(range(len(lines_output)))
+        elif disc.scope == DiscountScope.PRODUCT and disc.target_product_id:
+            eligible_indices = [
+                index for index, product_id in enumerate(line_product_ids)
+                if product_id == disc.target_product_id
+            ]
+
+        eligible_subtotal = sum((lines_output[i].subtotal for i in eligible_indices), Decimal("0.00"))
+        eligible_qty = sum(line_quantities[i] for i in eligible_indices)
+        if not disc.is_active:
+            warnings.append(f"Discount '{disc.name}' is currently inactive.")
+        elif not (disc.valid_from <= as_of <= disc.valid_to):
+            warnings.append(
+                f"Discount '{disc.name}' is outside its active validity window ({disc.valid_from} to {disc.valid_to})."
+            )
+        else:
+            used_count = (await db.execute(
+                select(func.count(DiscountRedemption.id)).where(
                     DiscountRedemption.discount_rule_id == disc.id
                 )
-                used_count = (await db.execute(redemptions_query)).scalar_one()
-
-                if disc.max_usage_limit is not None and used_count >= disc.max_usage_limit:
-                    warnings.append(f"Discount '{disc.name}' has reached its maximum usage cap ({disc.max_usage_limit}).")
-                else:
-                    # Scope check
-                    eligible_subtotal = Decimal("0.00")
-                    eligible_qty = 0
-
-                    if disc.scope == DiscountScope.SUBSCRIPTION:
-                        eligible_subtotal = gross_subtotal
-                        eligible_qty = total_qty
-                    elif disc.scope == DiscountScope.PRODUCT and disc.target_product_id:
-                        for idx, pline in enumerate(payload.product_lines):
-                            if pline.product_id == disc.target_product_id:
-                                # Match corresponding line output
-                                matching_out = [
-                                    l for l in lines_output
-                                    if l.product_name == prod.name or l.description.startswith(prod.name)
-                                ]
-                                for m in matching_out:
-                                    eligible_subtotal += m.subtotal
-                                    eligible_qty += m.quantity
-
-                    if eligible_subtotal < disc.min_spend:
-                        warnings.append(f"Subtotal ${eligible_subtotal} is below discount min spend ${disc.min_spend}.")
-                    elif eligible_qty < disc.min_quantity:
-                        warnings.append(f"Quantity {eligible_qty} is below discount min quantity {disc.min_quantity}.")
-                    else:
-                        if disc.discount_type == DiscountType.PERCENTAGE:
-                            discount_amount = _money(eligible_subtotal * Decimal(str(disc.value)) / Decimal("100"))
-                        else:
-                            discount_amount = min(eligible_subtotal, Decimal(str(disc.value)))
-
-    # Allocate discount proportionally across lines
-    if gross_subtotal > Decimal("0.00") and discount_amount > Decimal("0.00"):
-        allocated = Decimal("0.00")
-        for i, l in enumerate(lines_output):
-            if i == len(lines_output) - 1:
-                l.discount_amount = discount_amount - allocated
+            )).scalar_one()
+            if disc.max_usage_limit is not None and used_count >= disc.max_usage_limit:
+                warnings.append(
+                    f"Discount '{disc.name}' has reached its maximum usage cap ({disc.max_usage_limit})."
+                )
+            elif not eligible_indices:
+                warnings.append(f"Discount '{disc.name}' has no eligible lines in this preview.")
+            elif eligible_subtotal < disc.min_spend:
+                warnings.append(f"Subtotal ${eligible_subtotal} is below discount min spend ${disc.min_spend}.")
+            elif eligible_qty < disc.min_quantity:
+                warnings.append(f"Quantity {eligible_qty} is below discount min quantity {disc.min_quantity}.")
+            elif disc.discount_type == DiscountType.PERCENTAGE:
+                discount_amount = _money(eligible_subtotal * Decimal(str(disc.value)) / Decimal("100"))
             else:
-                l_disc = _money(discount_amount * (l.subtotal / gross_subtotal))
-                l.discount_amount = l_disc
-                allocated += l_disc
+                discount_amount = min(eligible_subtotal, Decimal(str(disc.value)))
+
+        # Allocate only across the lines eligible for this rule.
+        remaining_discount = discount_amount
+        for position, line_index in enumerate(eligible_indices):
+            line = lines_output[line_index]
+            if position == len(eligible_indices) - 1:
+                allocation = remaining_discount
+            elif eligible_subtotal > 0:
+                allocation = _money(discount_amount * line.subtotal / eligible_subtotal)
+            else:
+                allocation = Decimal("0.00")
+            allocation = min(line.subtotal, max(Decimal("0.00"), allocation), remaining_discount)
+            line.discount_amount = allocation
+            remaining_discount -= allocation
 
     # 4. Tax evaluation
     tax_rules_cache = {}
     tax_amount = Decimal("0.00")
 
     for i, l in enumerate(lines_output):
-        req_tax_id = None
-        # Look up line tax id
-        if i == 0 and payload.plan_id:
-            req_tax_id = payload.default_tax_rule_id
-        elif payload.product_lines:
-            idx = i - 1 if payload.plan_id else i
-            if 0 <= idx < len(payload.product_lines):
-                req_tax_id = payload.product_lines[idx].tax_rule_id or payload.default_tax_rule_id
-
+        req_tax_id = line_tax_rule_ids[i]
         if req_tax_id:
             if req_tax_id not in tax_rules_cache:
                 t_rule = (await db.execute(select(TaxRule).where(TaxRule.id == req_tax_id))).scalar_one_or_none()
@@ -881,10 +957,13 @@ async def calculate_preview(
                 taxable_base = max(Decimal("0.00"), l.subtotal - l.discount_amount)
                 l.tax_amount = _money(taxable_base * l.tax_rate / Decimal("100"))
                 tax_amount += l.tax_amount
+            else:
+                warnings.append(f"Tax rule for '{l.description}' is inactive or missing.")
 
         l.line_total = _money(l.subtotal - l.discount_amount + l.tax_amount)
 
-    total_amount = _money(gross_subtotal - discount_amount + tax_amount)
+    discount_amount = sum((line.discount_amount for line in lines_output), Decimal("0.00"))
+    total_amount = sum((line.line_total for line in lines_output), Decimal("0.00"))
 
     return CalculatePreviewResponse(
         plan_name=plan_name,

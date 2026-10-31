@@ -43,15 +43,6 @@ class DiscountRuleUpdate(BaseModel):
     valid_to: Optional[date] = None
     is_active: Optional[bool] = None
 
-    @model_validator(mode="after")
-    def validate_discount_update(self):
-        if self.valid_from and self.valid_to and self.valid_from > self.valid_to:
-            raise ValueError("valid_from date cannot be after valid_to date")
-        if self.discount_type == DiscountType.PERCENTAGE and self.value and self.value > Decimal("100.00"):
-            raise ValueError("Percentage discount value cannot exceed 100%")
-        return self
-
-
 class DiscountRuleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

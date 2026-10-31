@@ -2,8 +2,7 @@ import enum
 from typing import TYPE_CHECKING, List
 from sqlalchemy import String, Boolean, Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, TimestampMixin
+from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.customer import CustomerAccountMembership

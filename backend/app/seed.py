@@ -3,7 +3,8 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 from sqlalchemy import select
-from app.core.database import engine, AsyncSessionLocal, Base
+from app.core.database import engine, AsyncSessionLocal
+from app.models.base import Base
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.customer import CustomerAccount, CustomerAccountMembership, CustomerMembershipRole

@@ -34,8 +34,14 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
+    _backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    _project_root = os.path.dirname(_backend_dir)
+
     model_config = SettingsConfigDict(
-        env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env"),
+        env_file=[
+            os.path.join(_project_root, ".env"),
+            os.path.join(_backend_dir, ".env"),
+        ],
         env_file_encoding="utf-8",
         extra="ignore"
     )

@@ -4,8 +4,7 @@ from decimal import Decimal
 from typing import Optional
 from sqlalchemy import String, Numeric, Boolean, Integer, Date, Enum, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, TimestampMixin
+from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 
 class BillingCadence(str, enum.Enum):

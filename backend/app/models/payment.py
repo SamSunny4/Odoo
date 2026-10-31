@@ -9,8 +9,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, utc_now
+from app.models.base import Base, UUIDPrimaryKeyMixin, utc_now
 
 if TYPE_CHECKING:
     from app.models.invoice import Invoice

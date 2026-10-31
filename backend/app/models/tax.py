@@ -1,8 +1,7 @@
 from decimal import Decimal
 from sqlalchemy import String, Numeric, Boolean, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, TimestampMixin
+from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 
 class TaxRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):

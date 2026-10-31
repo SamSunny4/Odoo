@@ -4,8 +4,7 @@ from typing import Optional
 from sqlalchemy import String, DateTime, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, utc_now
+from app.models.base import Base, UUIDPrimaryKeyMixin, utc_now
 
 
 class AuditEvent(Base, UUIDPrimaryKeyMixin):

@@ -4,9 +4,8 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
-from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
-
+from app.models.base import Base
 
 # Async engine for application runtime
 engine = create_async_engine(
@@ -25,11 +24,6 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
-class Base(DeclarativeBase):
-    """Base declarative class for all SQLAlchemy 2 models."""
-    pass
-
-
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency for providing database session to FastAPI route handlers."""
     async with AsyncSessionLocal() as session:
@@ -37,4 +31,3 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
-

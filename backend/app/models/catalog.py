@@ -5,8 +5,7 @@ from typing import List, Optional
 from sqlalchemy import String, Text, Numeric, Boolean, Enum, ForeignKey, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, TimestampMixin
+from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 
 
 class ProductType(str, enum.Enum):

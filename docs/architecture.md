@@ -12,29 +12,30 @@ erDiagram
     CUSTOMER_ACCOUNT ||--o{ CUSTOMER_ACCOUNT_MEMBERSHIP : "has members"
     CUSTOMER_ACCOUNT ||--o{ SUBSCRIPTION : "holds"
     CUSTOMER_ACCOUNT ||--o{ INVOICE : "billed to"
-    
+  
     PRODUCT ||--o{ PRODUCT_VARIANT : "has"
     PRODUCT ||--o{ SUBSCRIPTION_LINE : "referenced in"
-    
+  
     PLAN ||--o{ SUBSCRIPTION : "governs"
     TAX_RULE ||--o{ SUBSCRIPTION_LINE : "applies"
     DISCOUNT_RULE ||--o{ DISCOUNT_REDEMPTION : "tracks usage"
-    
+  
     SUBSCRIPTION ||--o{ SUBSCRIPTION_LINE : "contains"
     SUBSCRIPTION ||--o{ BILLING_RUN_ITEM : "evaluated in"
     SUBSCRIPTION ||--o{ INVOICE : "generates"
-    
+  
     BILLING_RUN ||--o{ BILLING_RUN_ITEM : "contains items"
     INVOICE ||--o{ INVOICE_LINE : "contains"
     INVOICE ||--o{ PAYMENT : "receives"
     PAYMENT ||--o| PAYMENT_REVERSAL : "reversed by"
-    
+  
     USER ||--o{ AUDIT_EVENT : "actor"
 ```
 
 ### Table Definitions & Constraints
 
 #### 1. `users`
+
 - `id`: UUID (Primary Key, default `gen_random_uuid()`)
 - `email`: VARCHAR(255), Unique, Lowercased, Indexed
 - `hashed_password`: VARCHAR(255), Not Null
@@ -45,6 +46,7 @@ erDiagram
 - `updated_at`: TIMESTAMPTZ, default `clock_timestamp()`
 
 #### 2. `customer_accounts` & `customer_account_memberships`
+
 - **`customer_accounts`**:
   - `id`: UUID (PK)
   - `company_name`: VARCHAR(255), Not Null
@@ -68,6 +70,7 @@ erDiagram
   - *Constraint*: `UNIQUE (customer_account_id, user_id)`
 
 #### 3. `products` & `product_variants`
+
 - **`products`**:
   - `id`: UUID (PK)
   - `name`: VARCHAR(255), Not Null
@@ -85,6 +88,7 @@ erDiagram
   - `is_active`: BOOLEAN, default `true`
 
 #### 4. `plans`
+
 - `id`: UUID (PK)
 - `name`: VARCHAR(255), Not Null
 - `cadence`: VARCHAR(20), Not Null (`daily`, `weekly`, `monthly`, `yearly`)
@@ -100,6 +104,7 @@ erDiagram
 - `created_at`, `updated_at`: TIMESTAMPTZ
 
 #### 5. `tax_rules` & `discount_rules`
+
 - **`tax_rules`**:
   - `id`: UUID (PK)
   - `name`: VARCHAR(255), Not Null
@@ -127,6 +132,7 @@ erDiagram
   - *Constraint*: `UNIQUE (discount_rule_id, invoice_id)`
 
 #### 6. `subscriptions` & `subscription_lines`
+
 - **`subscriptions`**:
   - `id`: UUID (PK)
   - `subscription_number`: VARCHAR(50), Unique, Not Null (e.g. `SUB-2026-0001`)
@@ -149,6 +155,7 @@ erDiagram
   - `tax_rule_id`: UUID (FK -> `tax_rules.id`, Nullable)
 
 #### 7. `billing_runs` & `billing_run_items` (Billing Control Tower Engine)
+
 - **`billing_runs`**:
   - `id`: UUID (PK)
   - `run_date`: DATE, Not Null
@@ -180,6 +187,7 @@ erDiagram
   - *Constraint*: `UNIQUE (subscription_id, billing_run_id)`
 
 #### 8. `invoices` & `invoice_lines`
+
 - **`invoices`**:
   - `id`: UUID (PK)
   - `invoice_number`: VARCHAR(50), Unique, Not Null (e.g. `INV-2026-0001`)
@@ -222,6 +230,7 @@ erDiagram
   - `line_total`: NUMERIC(12,2), Not Null
 
 #### 9. `payments` & `payment_reversals` (Append-Only)
+
 - **`payments`**:
   - `id`: UUID (PK)
   - `invoice_id`: UUID (FK -> `invoices.id`), Not Null
@@ -244,25 +253,25 @@ erDiagram
 
 ## 2. Security Boundaries & Granular Permissions
 
-| Capability / Action | Admin | Staff | Customer User |
-|---|:---:|:---:|:---:|
-| **User Management: Add Staff / Admin** | Allowed | Forbidden | Forbidden |
-| **Catalog: Create / Edit Products & Plans** | Allowed | Forbidden | Forbidden |
-| **Catalog: View Cost Price** | Allowed | Forbidden (Hidden) | Forbidden |
-| **Catalog: View Sales Price & Plans** | Allowed | Allowed | Allowed (Public catalog) |
-| **Discounts & Taxes: Create / Edit Rules** | Allowed | Forbidden | Forbidden |
-| **Quotes: Create / Edit / Issue Quotation** | Allowed | Allowed | Forbidden |
-| **Subscriptions: Convert Quote to Active** | Allowed | Allowed | Forbidden |
-| **Subscriptions: View Detail** | All Subscriptions | All Subscriptions | Own Account Only |
-| **Subscriptions: Pause / Resume / Cancel** | Allowed | Allowed | If Plan Policy Permits |
-| **Billing Control Tower: Run Preview** | Allowed | Allowed | Forbidden |
-| **Billing Control Tower: Commit Batch** | Allowed | Forbidden (Admin Only) | Forbidden |
-| **Invoices: Confirm / Send / Print** | Allowed | Allowed | Own Account (View/Print) |
-| **Invoices: Cancel (with Reason)** | Allowed | Forbidden | Forbidden |
-| **Payments: Record Payment** | Allowed | Allowed | Forbidden |
-| **Payments: Record Reversal / Refund** | Allowed | Forbidden (Admin Only) | Forbidden |
-| **Finance Reports: Full Revenue & MRR/ARR**| Allowed | Forbidden (Admin Only) | Forbidden |
-| **Operations Reports: Overdue Queue & Chase**| Allowed | Allowed | Forbidden |
+| Capability / Action                                 |       Admin       |         Staff         |      Customer User      |
+| --------------------------------------------------- | :---------------: | :--------------------: | :----------------------: |
+| **User Management: Add Staff / Admin**        |      Allowed      |       Forbidden       |        Forbidden        |
+| **Catalog: Create / Edit Products & Plans**   |      Allowed      |       Forbidden       |        Forbidden        |
+| **Catalog: View Cost Price**                  |      Allowed      |   Forbidden (Hidden)   |        Forbidden        |
+| **Catalog: View Sales Price & Plans**         |      Allowed      |        Allowed        | Allowed (Public catalog) |
+| **Discounts & Taxes: Create / Edit Rules**    |      Allowed      |       Forbidden       |        Forbidden        |
+| **Quotes: Create / Edit / Issue Quotation**   |      Allowed      |        Allowed        |        Forbidden        |
+| **Subscriptions: Convert Quote to Active**    |      Allowed      |        Allowed        |        Forbidden        |
+| **Subscriptions: View Detail**                | All Subscriptions |   All Subscriptions   |     Own Account Only     |
+| **Subscriptions: Pause / Resume / Cancel**    |      Allowed      |        Allowed        |  If Plan Policy Permits  |
+| **Billing Control Tower: Run Preview**        |      Allowed      |        Allowed        |        Forbidden        |
+| **Billing Control Tower: Commit Batch**       |      Allowed      | Forbidden (Admin Only) |        Forbidden        |
+| **Invoices: Confirm / Send / Print**          |      Allowed      |        Allowed        | Own Account (View/Print) |
+| **Invoices: Cancel (with Reason)**            |      Allowed      |       Forbidden       |        Forbidden        |
+| **Payments: Record Payment**                  |      Allowed      |        Allowed        |        Forbidden        |
+| **Payments: Record Reversal / Refund**        |      Allowed      | Forbidden (Admin Only) |        Forbidden        |
+| **Finance Reports: Full Revenue & MRR/ARR**   |      Allowed      | Forbidden (Admin Only) |        Forbidden        |
+| **Operations Reports: Overdue Queue & Chase** |      Allowed      |        Allowed        |        Forbidden        |
 
 ---
 

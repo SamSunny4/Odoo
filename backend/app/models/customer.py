@@ -4,8 +4,7 @@ from typing import TYPE_CHECKING, List
 from sqlalchemy import String, DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base
-from app.models.base import UUIDPrimaryKeyMixin, TimestampMixin, utc_now
+from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin, utc_now
 
 if TYPE_CHECKING:
     from app.models.user import User

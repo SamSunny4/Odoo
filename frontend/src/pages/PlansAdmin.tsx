@@ -407,7 +407,7 @@ export const PlansAdmin: React.FC<PlansAdminProps> = ({ onNavigate }) => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Base Price ($) *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Base Price (₹) *</label>
                   <input
                     type="number"
                     step="0.01"

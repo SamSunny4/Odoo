@@ -205,8 +205,8 @@ async def seed_users(db_session):
         billing_address_line1="100 Innovation Blvd",
         billing_city="Austin",
         billing_postal_code="78701",
-        billing_country="US",
-        currency="USD",
+        billing_country="IN",
+        currency="INR",
     )
     db_session.add(account_a)
     await db_session.flush()
@@ -234,8 +234,8 @@ async def seed_users(db_session):
         billing_address_line1="200 Tech Park",
         billing_city="Seattle",
         billing_postal_code="98101",
-        billing_country="US",
-        currency="USD",
+        billing_country="IN",
+        currency="INR",
     )
     db_session.add(account_b)
     await db_session.flush()

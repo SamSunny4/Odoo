@@ -317,7 +317,7 @@ async def test_payment_provider_adapter_and_webhooks(client: AsyncClient):
             "provider": "manual",
             "external_id": "ch_mock_98234123",
             "amount": 125.50,
-            "currency": "USD",
+            "currency": "INR",
             "metadata": {"source": "external_gateway"},
         },
     )
@@ -392,7 +392,7 @@ async def test_collection_queue_aging_and_reminders(client: AsyncClient, seed_us
         invoice_number=f"INV-TEST-{uuid.uuid4().hex[:6].upper()}",
         subscription_id=uuid.uuid4(),
         customer_account_id=customer_account.id,
-        currency="USD",
+        currency="INR",
         status=InvoiceStatus.CONFIRMED,
         billing_period_start=past_due - timedelta(days=30),
         billing_period_end=past_due,

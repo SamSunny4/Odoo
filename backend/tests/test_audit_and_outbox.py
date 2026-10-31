@@ -145,7 +145,7 @@ async def test_audit_event_on_invoice_confirm_and_payment(client, db_session, se
         idempotency_key="idemp_inv_audit_999",
         customer_snapshot={"company_name": "Acme Corp"},
         billing_address_snapshot={"city": "Austin"},
-        currency="USD",
+        currency="INR",
         status=InvoiceStatus.DRAFT,
         billing_period_start=date(2026, 3, 1),
         billing_period_end=date(2026, 3, 31),

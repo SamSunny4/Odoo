@@ -59,7 +59,7 @@ erDiagram
   - `billing_state`: VARCHAR(100)
   - `billing_postal_code`: VARCHAR(20), Not Null
   - `billing_country`: VARCHAR(2), Not Null (ISO 3166-1 alpha-2)
-  - `currency`: VARCHAR(3), Not Null (default `USD`)
+  - `currency`: VARCHAR(3), Not Null (default `INR`)
   - `created_at`, `updated_at`: TIMESTAMPTZ
 - **`customer_account_memberships`**:
   - `id`: UUID (PK)
@@ -195,7 +195,7 @@ erDiagram
   - `customer_account_id`: UUID (FK -> `customer_accounts.id`), Not Null
   - `billing_run_id`: UUID (FK -> `billing_runs.id`, Nullable)
   - `idempotency_key`: VARCHAR(120), Unique, Not Null (`sub_{id}_{period_start}_{period_end}`)
-  - `currency`: VARCHAR(3), Not Null, default `USD`
+  - `currency`: VARCHAR(3), Not Null, default `INR`
   - `status`: VARCHAR(20), Not Null (`draft`, `confirmed`, `paid`, `cancelled`)
   - `billing_period_start`: DATE, Not Null
   - `billing_period_end`: DATE, Not Null

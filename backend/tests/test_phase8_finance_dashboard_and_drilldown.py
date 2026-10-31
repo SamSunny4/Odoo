@@ -20,7 +20,7 @@ async def test_dashboard_summary_metrics_and_rule_definitions(client: AsyncClien
     assert res.status_code == 200
     data = res.json()
 
-    assert data["currency"] == "USD"
+    assert data["currency"] == "INR"
     assert data["period"] == "this_month"
     assert data["period_start"] is not None
     assert data["period_end"] is not None

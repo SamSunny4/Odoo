@@ -1053,7 +1053,7 @@ export const DiscountsAdmin: React.FC<DiscountsAdminProps> = ({ onNavigate }) =>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Min Spend ($)</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Min Spend (₹)</label>
                   <input
                     type="number"
                     step="0.01"

@@ -1157,10 +1157,10 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                           }}
                           className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
                         >
-                          <option value="">Standard Edition ($0.00)</option>
+                          <option value="">Standard Edition (₹0.00)</option>
                           {variants.map((v) => (
                             <option key={v.id} value={v.id}>
-                              {v.name} (+${Number(v.price_adjustment).toFixed(2)})
+                              {v.name} (+₹{Number(v.price_adjustment).toFixed(2)})
                             </option>
                           ))}
                         </select>

@@ -1414,7 +1414,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
 
             <div>
               <label htmlFor="payment-amount" className="block text-xs font-semibold text-slate-700 mb-1">
-                Payment Amount ($) *
+                Payment Amount (₹) *
               </label>
               <input
                 id="payment-amount"
@@ -1512,7 +1512,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
 
             <div>
               <label htmlFor="reversal-amount" className="block text-xs font-semibold text-slate-700 mb-1">
-                Reversal Amount ($) *
+                Reversal Amount (₹) *
               </label>
               <input
                 id="reversal-amount"

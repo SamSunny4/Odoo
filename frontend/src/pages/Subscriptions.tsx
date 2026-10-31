@@ -32,11 +32,13 @@ import {
   Layers,
   History,
   X,
-  ExternalLink,
   ChevronRight,
   Sparkles,
   Trash2,
 } from 'lucide-react';
+
+const formatDateInput = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
 const STATUS_OPTIONS: FilterOption[] = [
   { label: 'Active', value: 'active' },
@@ -97,14 +99,16 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
     template_id: string;
     start_date: string;
     expiry_date: string;
+    quote_valid_until: string;
     status: 'draft' | 'quotation';
     lines: { product_id: string; variant_id: string; quantity: number }[];
   }>({
     customer_account_id: '',
     plan_id: '',
     template_id: '',
-    start_date: new Date().toISOString().split('T')[0],
+    start_date: formatDateInput(new Date()),
     expiry_date: '',
+    quote_valid_until: '',
     status: 'quotation',
     lines: [],
   });
@@ -225,10 +229,9 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
       return;
     }
 
-    const startDate = createForm.start_date ? new Date(createForm.start_date) : new Date();
-    const expiryDate = new Date(startDate.getTime() + tpl.validity_days * 86400000)
-      .toISOString()
-      .split('T')[0];
+    const quoteStartDate = new Date();
+    quoteStartDate.setDate(quoteStartDate.getDate() + tpl.validity_days);
+    const quoteValidUntil = formatDateInput(quoteStartDate);
 
     const mappedLines = (tpl.default_lines || []).map((dl) => ({
       product_id: dl.product_id,
@@ -240,7 +243,7 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
       ...prev,
       template_id: templateId,
       plan_id: tpl.default_plan_id || prev.plan_id,
-      expiry_date: expiryDate,
+      quote_valid_until: quoteValidUntil,
       lines: mappedLines.length > 0 ? mappedLines : prev.lines,
     }));
   };
@@ -256,8 +259,9 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
       customer_account_id: initialCust,
       plan_id: initialPlan,
       template_id: '',
-      start_date: new Date().toISOString().split('T')[0],
+      start_date: formatDateInput(new Date()),
       expiry_date: '',
+      quote_valid_until: '',
       status: 'quotation',
       lines: initialProd ? [{ product_id: initialProd, variant_id: initialVar, quantity: 1 }] : [],
     });
@@ -293,6 +297,7 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
         template_id: createForm.template_id || undefined,
         start_date: createForm.start_date || undefined,
         expiry_date: createForm.expiry_date || undefined,
+        quote_valid_until: createForm.quote_valid_until || undefined,
         status: createForm.status,
         lines: createForm.lines.map((l) => ({
           product_id: l.product_id,
@@ -716,22 +721,13 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                   <div className="flex flex-wrap gap-2">
                     {/* Draft Transitions */}
                     {selectedSubDetail.status === 'draft' && (
-                      <>
-                        <button
-                          onClick={() => handleTransition('issue_quote', 'Formal quote issued to client')}
-                          disabled={transitioning}
-                          className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition flex items-center gap-1.5 shadow-xs"
-                        >
-                          <Send className="w-3.5 h-3.5" /> Issue Quotation
-                        </button>
-                        <button
-                          onClick={() => handleTransition('confirm', 'Direct customer confirmation')}
-                          disabled={transitioning}
-                          className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 transition flex items-center gap-1.5 shadow-xs"
-                        >
-                          <CheckCircle className="w-3.5 h-3.5" /> Confirm Order
-                        </button>
-                      </>
+                      <button
+                        onClick={() => handleTransition('issue_quote', 'Formal quote issued to client')}
+                        disabled={transitioning}
+                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition flex items-center gap-1.5 shadow-xs"
+                      >
+                        <Send className="w-3.5 h-3.5" /> Issue Quotation
+                      </button>
                     )}
 
                     {/* Quotation Transitions */}
@@ -845,6 +841,10 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                       Expiry:{' '}
                       <span className="font-mono">{selectedSubDetail.expiry_date || 'Open/Ongoing'}</span>
                     </div>
+                    <div className="text-slate-600">
+                      Quote valid until:{' '}
+                      <span className="font-mono">{selectedSubDetail.quote_valid_until || 'Not set'}</span>
+                    </div>
                     <div className="text-indigo-700 font-semibold">
                       Next Billing: <span className="font-mono">{selectedSubDetail.next_billing_date || 'None'}</span>
                     </div>
@@ -863,10 +863,31 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                           <th className="p-2.5">Product & Variant</th>
                           <th className="p-2.5 text-right">Unit Price</th>
                           <th className="p-2.5 text-center">Qty</th>
+                          <th className="p-2.5 text-right">Tax</th>
                           <th className="p-2.5 text-right">Line Total</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
+                        {selectedSubDetail.plan_charge && (
+                          <tr>
+                            <td className="p-2.5">
+                              <div className="font-semibold text-slate-900">{selectedSubDetail.plan_name}</div>
+                              <div className="text-[11px] text-slate-500">Plan base fee</div>
+                            </td>
+                            <td className="p-2.5 text-right font-mono text-slate-700">
+                              ${Number(selectedSubDetail.plan_charge.unit_price).toFixed(2)}
+                            </td>
+                            <td className="p-2.5 text-center font-mono text-slate-700">1</td>
+                            <td className="p-2.5 text-right text-slate-600">
+                              {selectedSubDetail.plan_charge.tax_name
+                                ? `${selectedSubDetail.plan_charge.tax_name} ${Number(selectedSubDetail.plan_charge.tax_rate).toFixed(2)}% · $${Number(selectedSubDetail.plan_charge.tax_amount).toFixed(2)}`
+                                : '—'}
+                            </td>
+                            <td className="p-2.5 text-right font-mono font-bold text-slate-900">
+                              ${Number(selectedSubDetail.plan_charge.line_total).toFixed(2)}
+                            </td>
+                          </tr>
+                        )}
                         {selectedSubDetail.lines.map((ln) => (
                           <tr key={ln.id}>
                             <td className="p-2.5">
@@ -881,16 +902,41 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                               ${Number(ln.unit_price).toFixed(2)}
                             </td>
                             <td className="p-2.5 text-center font-mono text-slate-700">{ln.quantity}</td>
+                            <td className="p-2.5 text-right text-slate-600">
+                              {ln.tax_rate !== null && ln.tax_rate !== undefined
+                                ? `${Number(ln.tax_rate).toFixed(2)}% · $${Number(ln.tax_amount).toFixed(2)}`
+                                : '—'}
+                            </td>
                             <td className="p-2.5 text-right font-mono font-bold text-slate-900">
-                              ${Number(ln.line_subtotal).toFixed(2)}
+                              ${Number(ln.line_total).toFixed(2)}
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  <div className="flex justify-end p-2 text-sm font-bold text-slate-900">
-                    Total Order Value: ${Number(selectedSubDetail.total_amount).toFixed(2)}
+                  <div className="ml-auto max-w-xs space-y-1.5 p-2 text-xs">
+                    <div className="flex justify-between text-slate-600">
+                      <span>Subtotal</span>
+                      <span className="font-mono">${Number(selectedSubDetail.subtotal_amount).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>Discounts</span>
+                      <span className="font-mono">−${Number(selectedSubDetail.discount_amount).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>Tax</span>
+                      <span className="font-mono">${Number(selectedSubDetail.tax_amount).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-slate-200 pt-2 text-sm font-bold text-slate-900">
+                      <span>Total Order Value</span>
+                      <span className="font-mono">${Number(selectedSubDetail.total_amount).toFixed(2)}</span>
+                    </div>
+                    {selectedSubDetail.calculation_warnings.length > 0 && (
+                      <div className="rounded-md bg-amber-50 p-2 text-amber-800">
+                        {selectedSubDetail.calculation_warnings.map((warning) => <div key={warning}>{warning}</div>)}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1009,7 +1055,7 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Start Date *</label>
                   <input
@@ -1021,11 +1067,20 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Expiry / Valid To</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Subscription Expiry</label>
                   <input
                     type="date"
                     value={createForm.expiry_date}
                     onChange={(e) => setCreateForm({ ...createForm, expiry_date: e.target.value })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Quote Valid Until</label>
+                  <input
+                    type="date"
+                    value={createForm.quote_valid_until}
+                    onChange={(e) => setCreateForm({ ...createForm, quote_valid_until: e.target.value })}
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs"
                   />
                 </div>

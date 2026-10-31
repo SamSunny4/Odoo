@@ -1,19 +1,24 @@
 from typing import List, Optional, Union
-from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.clock import organization_today
 from app.models.user import User
 from app.models.customer import CustomerAccount, CustomerAccountMembership
 from app.models.subscription import Subscription, SubscriptionLine, SubscriptionStatus
 from app.models.invoice import Invoice, InvoiceStatus
-from app.schemas.subscription import SubscriptionResponse, SubscriptionLineResponse
+from app.schemas.subscription import (
+    SubscriptionResponse,
+    SubscriptionLineResponse,
+    SubscriptionPlanChargeResponse,
+)
 from app.schemas.invoice import InvoiceResponse, InvoiceLineResponse
 from app.schemas.pagination import PaginatedResponse
 from app.api.v1.deps import require_customer
+from app.services.billing import _load_pricing_rules, calculate_subscription_charge
 
 router = APIRouter()
 
@@ -108,22 +113,51 @@ async def get_my_subscriptions(
     response.headers["X-Page-Size"] = str(page_size)
     response.headers["X-Total-Pages"] = str(total_pages)
 
+    pricing_rules = await _load_pricing_rules(db)
+    as_of = organization_today()
     items = []
     for sub in subs:
-        total = Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00")
-        line_responses = []
-        for line in sub.lines:
-            total += Decimal(str(line.unit_price)) * line.quantity
-            line_responses.append(
-                SubscriptionLineResponse(
-                    id=line.id,
-                    product_id=line.product_id,
-                    product_name=line.product.name if line.product else "Product",
-                    variant_name=line.variant.name if line.variant else None,
-                    quantity=line.quantity,
-                    unit_price=line.unit_price,
-                )
+        tax_map, default_tax_rule, discount_rules, redemption_counts = pricing_rules
+        charge = calculate_subscription_charge(
+            sub,
+            tax_map=tax_map,
+            default_tax_rule=default_tax_rule,
+            discount_rules=discount_rules,
+            redemption_counts=redemption_counts,
+            as_of=as_of,
+        )
+        plan_charge = None
+        charge_lines = charge.lines
+        if sub.plan and charge.lines:
+            plan_line = charge.lines[0]
+            plan_charge = SubscriptionPlanChargeResponse(
+                unit_price=plan_line.unit_price,
+                subtotal=plan_line.subtotal,
+                discount_amount=plan_line.discount,
+                tax_name=plan_line.tax_name,
+                tax_rate=plan_line.tax_rate,
+                tax_amount=plan_line.tax_amount,
+                line_total=plan_line.line_total,
             )
+            charge_lines = charge.lines[1:]
+        line_responses = [
+            SubscriptionLineResponse(
+                id=line.id,
+                product_id=line.product_id,
+                product_name=line.product.name if line.product else "Product",
+                product_variant_id=line.product_variant_id,
+                variant_name=line.variant.name if line.variant else None,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                tax_rule_id=line.tax_rule_id,
+                tax_rate=priced_line.tax_rate if priced_line.tax_name else None,
+                line_subtotal=priced_line.subtotal,
+                discount_amount=priced_line.discount,
+                tax_amount=priced_line.tax_amount,
+                line_total=priced_line.line_total,
+            )
+            for line, priced_line in zip(sub.lines, charge_lines)
+        ]
 
         items.append(
             SubscriptionResponse(
@@ -136,10 +170,16 @@ async def get_my_subscriptions(
                 status=sub.status,
                 start_date=sub.start_date,
                 expiry_date=sub.expiry_date,
+                quote_valid_until=sub.quote_valid_until,
                 next_billing_date=sub.next_billing_date,
                 billing_anchor_day=sub.billing_anchor_day,
                 payment_terms_days=sub.payment_terms_days,
-                total_amount=total,
+                plan_charge=plan_charge,
+                subtotal_amount=charge.subtotal,
+                discount_amount=charge.discount,
+                tax_amount=charge.tax,
+                total_amount=charge.total,
+                calculation_warnings=charge.warnings,
                 lines=line_responses,
             )
         )

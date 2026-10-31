@@ -106,6 +106,8 @@ async def create_quotation_template(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Plan {payload.default_plan_id} not found.",
             )
+        if not plan.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Plan '{plan.name}' is archived and cannot be used in a new template.")
         plan_name = plan.name
 
     # Validate line products if provided
@@ -117,6 +119,8 @@ async def create_quotation_template(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Product {line.product_id} not found.",
             )
+        if not prod.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Product '{prod.name}' is archived and cannot be added to a new template.")
         var_name = None
         if line.product_variant_id:
             variant = (
@@ -132,6 +136,8 @@ async def create_quotation_template(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Product variant {line.product_variant_id} not found for product {prod.name}.",
                 )
+            if not variant.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Variant '{variant.name}' is archived and cannot be added to a new template.")
             var_name = variant.name
 
         raw_lines.append(
@@ -243,6 +249,8 @@ async def update_quotation_template(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Plan {payload.default_plan_id} not found.",
             )
+        if not plan.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Plan '{plan.name}' is archived and cannot be used in a new template.")
         changes["default_plan_id"] = {"from": str(template.default_plan_id), "to": str(payload.default_plan_id)}
         template.default_plan_id = payload.default_plan_id
 
@@ -255,6 +263,8 @@ async def update_quotation_template(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Product {line.product_id} not found.",
                 )
+            if not prod.is_active:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Product '{prod.name}' is archived and cannot be added to a new template.")
             var_name = None
             if line.product_variant_id:
                 variant = (
@@ -270,6 +280,8 @@ async def update_quotation_template(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"Product variant {line.product_variant_id} not found for product {prod.name}.",
                     )
+                if not variant.is_active:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Variant '{variant.name}' is archived and cannot be added to a new template.")
                 var_name = variant.name
 
             raw_lines.append(

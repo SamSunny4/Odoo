@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.clock import organization_today
 from app.models.subscription import Subscription, SubscriptionLine, SubscriptionStatus
 from app.models.customer import CustomerAccount
 from app.models.plan import Plan, BillingCadence
@@ -20,6 +21,7 @@ from app.schemas.subscription import (
     SubscriptionResponse,
     SubscriptionDetailResponse,
     SubscriptionLineResponse,
+    SubscriptionPlanChargeResponse,
     SubscriptionCreate,
     SubscriptionUpdate,
     SubscriptionStatusAction,
@@ -28,7 +30,11 @@ from app.schemas.subscription import (
 from app.schemas.pagination import PaginatedResponse
 from app.api.v1.deps import require_staff_or_admin
 from app.services.audit import record_audit_event
-from app.services.billing import compute_next_billing_date
+from app.services.billing import (
+    calculate_subscription_charge,
+    compute_next_billing_date,
+    _load_pricing_rules,
+)
 
 CENT = Decimal("0.01")
 
@@ -41,19 +47,8 @@ router = APIRouter()
 
 
 async def generate_subscription_number(db: AsyncSession) -> str:
-    """Generate sequential unique subscription number like SUB-2026-0001."""
-    year = date.today().year
-    count_query = select(func.count(Subscription.id))
-    total_count = (await db.execute(count_query)).scalar_one()
-    seq = total_count + 1
-    while True:
-        candidate = f"SUB-{year}-{seq:04d}"
-        exists = (
-            await db.execute(select(Subscription.id).where(Subscription.subscription_number == candidate))
-        ).scalar_one_or_none()
-        if not exists:
-            return candidate
-        seq += 1
+    """Return a collision-resistant identifier without a count-then-insert race."""
+    return f"SUB-{organization_today().year}-{uuid.uuid4().hex.upper()}"
 
 
 def _subscription_query_options():
@@ -64,6 +59,149 @@ def _subscription_query_options():
         selectinload(Subscription.lines).selectinload(SubscriptionLine.variant),
         selectinload(Subscription.lines).selectinload(SubscriptionLine.tax_rule),
     ]
+
+
+async def _prepare_line(db: AsyncSession, line_data) -> dict:
+    """Validate a requested/template line and resolve its current sell price."""
+    def get_value(key, default=None):
+        if isinstance(line_data, dict):
+            return line_data.get(key, default)
+        return getattr(line_data, key, default)
+
+    product_id = get_value("product_id")
+    variant_id = get_value("product_variant_id")
+    quantity = get_value("quantity", 1)
+    requested_price = get_value("unit_price")
+    tax_rule_id = get_value("tax_rule_id")
+
+    product = (await db.execute(select(Product).where(Product.id == product_id))).scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product {product_id} not found.")
+    if not product.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Product '{product.name}' is archived and cannot be added to a new agreement.")
+
+    variant = None
+    adjustment = Decimal("0.00")
+    if variant_id:
+        variant = (await db.execute(
+            select(ProductVariant).where(
+                ProductVariant.id == variant_id,
+                ProductVariant.product_id == product.id,
+            )
+        )).scalar_one_or_none()
+        if not variant:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Variant {variant_id} not found for product {product.name}.")
+        if not variant.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Variant '{variant.name}' is archived and cannot be added to a new agreement.")
+        adjustment = Decimal(str(variant.price_adjustment))
+
+    if tax_rule_id:
+        tax_rule = (await db.execute(select(TaxRule).where(TaxRule.id == tax_rule_id))).scalar_one_or_none()
+        if not tax_rule:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tax rule {tax_rule_id} not found.")
+        if not tax_rule.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Tax rule '{tax_rule.name}' is archived and cannot be selected for a new agreement.")
+
+    unit_price = _money(Decimal(str(requested_price))) if requested_price is not None else _money(Decimal(str(product.sales_price)) + adjustment)
+    return {
+        "product": product,
+        "variant": variant,
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "tax_rule_id": tax_rule_id,
+    }
+
+
+def _validate_plan_availability(plan: Plan, start_date: date) -> None:
+    if not plan.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Plan '{plan.name}' is archived and cannot be chosen for new agreements.")
+    if plan.available_from and start_date < plan.available_from:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Plan '{plan.name}' is not available until {plan.available_from}.")
+    if plan.available_to and start_date > plan.available_to:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Plan '{plan.name}' was no longer available on {start_date}.")
+
+
+def _subscription_response(sub: Subscription, charge) -> SubscriptionResponse:
+    plan_charge = None
+    charge_lines = charge.lines
+    if sub.plan and charge.lines:
+        plan_line = charge.lines[0]
+        plan_charge = SubscriptionPlanChargeResponse(
+            unit_price=plan_line.unit_price,
+            subtotal=plan_line.subtotal,
+            discount_amount=plan_line.discount,
+            tax_name=plan_line.tax_name,
+            tax_rate=plan_line.tax_rate,
+            tax_amount=plan_line.tax_amount,
+            line_total=plan_line.line_total,
+        )
+        charge_lines = charge.lines[1:]
+    line_responses = [
+        SubscriptionLineResponse(
+            id=line.id,
+            product_id=line.product_id,
+            product_name=line.product.name if line.product else "Product",
+            product_variant_id=line.product_variant_id,
+            variant_name=line.variant.name if line.variant else None,
+            quantity=line.quantity,
+            unit_price=line.unit_price,
+            tax_rule_id=line.tax_rule_id,
+            tax_rate=charged.tax_rate if charged.tax_name else None,
+            line_subtotal=charged.subtotal,
+            discount_amount=charged.discount,
+            tax_amount=charged.tax_amount,
+            line_total=charged.line_total,
+        )
+        for line, charged in zip(sub.lines, charge_lines)
+    ]
+    return SubscriptionResponse(
+        id=sub.id,
+        subscription_number=sub.subscription_number,
+        customer_account_id=sub.customer_account_id,
+        customer_name=sub.customer_account.company_name if sub.customer_account else "Unknown",
+        plan_id=sub.plan_id,
+        plan_name=sub.plan.name if sub.plan else "Unknown",
+        status=sub.status,
+        start_date=sub.start_date,
+        expiry_date=sub.expiry_date,
+        quote_valid_until=sub.quote_valid_until,
+        next_billing_date=sub.next_billing_date,
+        billing_anchor_day=sub.billing_anchor_day,
+        payment_terms_days=sub.payment_terms_days,
+        plan_charge=plan_charge,
+        subtotal_amount=charge.subtotal,
+        discount_amount=charge.discount,
+        tax_amount=charge.tax,
+        total_amount=charge.total,
+        calculation_warnings=charge.warnings,
+        lines=line_responses,
+    )
+
+
+async def _calculate_subscription_charge(db: AsyncSession, sub: Subscription):
+    pricing_rules = await _load_pricing_rules(db)
+    return _charge_with_pricing_rules(sub, pricing_rules, organization_today())
+
+
+def _charge_with_pricing_rules(sub: Subscription, pricing_rules, as_of: date):
+    tax_map, default_tax_rule, discount_rules, redemption_counts = pricing_rules
+    return calculate_subscription_charge(
+        sub,
+        tax_map=tax_map,
+        default_tax_rule=default_tax_rule,
+        discount_rules=discount_rules,
+        redemption_counts=redemption_counts,
+        as_of=as_of,
+    )
+
+
+async def _reload_subscription(db: AsyncSession, subscription_id: uuid.UUID) -> Subscription:
+    result = await db.execute(
+        select(Subscription)
+        .where(Subscription.id == subscription_id)
+        .options(*_subscription_query_options())
+    )
+    return result.scalar_one()
 
 
 @router.get(
@@ -151,46 +289,12 @@ async def list_subscriptions(
     response.headers["X-Page-Size"] = str(page_size)
     response.headers["X-Total-Pages"] = str(total_pages)
 
-    items = []
-    for sub in subscriptions:
-        total = Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00")
-        line_responses = []
-        for line in sub.lines:
-            line_price = Decimal(str(line.unit_price)) * line.quantity
-            total += line_price
-            line_responses.append(
-                SubscriptionLineResponse(
-                    id=line.id,
-                    product_id=line.product_id,
-                    product_name=line.product.name if line.product else "Product",
-                    product_variant_id=line.product_variant_id,
-                    variant_name=line.variant.name if line.variant else None,
-                    quantity=line.quantity,
-                    unit_price=line.unit_price,
-                    tax_rule_id=line.tax_rule_id,
-                    tax_rate=Decimal(str(line.tax_rule.rate_percentage)) if line.tax_rule else None,
-                    line_subtotal=_money(line_price),
-                )
-            )
-
-        items.append(
-            SubscriptionResponse(
-                id=sub.id,
-                subscription_number=sub.subscription_number,
-                customer_account_id=sub.customer_account_id,
-                customer_name=sub.customer_account.company_name if sub.customer_account else "Unknown",
-                plan_id=sub.plan_id,
-                plan_name=sub.plan.name if sub.plan else "Unknown",
-                status=sub.status,
-                start_date=sub.start_date,
-                expiry_date=sub.expiry_date,
-                next_billing_date=sub.next_billing_date,
-                billing_anchor_day=sub.billing_anchor_day,
-                payment_terms_days=sub.payment_terms_days,
-                total_amount=_money(total),
-                lines=line_responses,
-            )
-        )
+    pricing_rules = await _load_pricing_rules(db)
+    as_of = organization_today()
+    items = [
+        _subscription_response(sub, _charge_with_pricing_rules(sub, pricing_rules, as_of))
+        for sub in subscriptions
+    ]
 
     if envelope:
         return PaginatedResponse[SubscriptionResponse](
@@ -229,122 +333,80 @@ async def create_subscription(
             detail=f"Customer account {payload.customer_account_id} not found.",
         )
 
-    # 2. Validate Plan
+    # Resolve the plan, template defaults, and catalog lines before writing anything.
     plan = (await db.execute(select(Plan).where(Plan.id == payload.plan_id))).scalar_one_or_none()
     if not plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Plan {payload.plan_id} not found.",
-        )
-    if not plan.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Plan '{plan.name}' is archived and cannot be chosen for new agreements.",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Plan {payload.plan_id} not found.")
 
-    # 3. Check Quotation Template defaults if supplied
-    lines_to_add = list(payload.lines)
+    today = organization_today()
+    start = payload.start_date or today
+    _validate_plan_availability(plan, start)
     expiry = payload.expiry_date
+    quote_valid_until = payload.quote_valid_until
+    line_inputs = list(payload.lines)
 
     if payload.template_id:
-        template = (
-            await db.execute(select(QuotationTemplate).where(QuotationTemplate.id == payload.template_id))
-        ).scalar_one_or_none()
-        if template:
-            if not expiry and template.validity_days:
-                base_start = payload.start_date or date.today()
-                expiry = base_start + timedelta(days=template.validity_days)
-            if not lines_to_add and template.default_lines:
-                for dl in template.default_lines:
-                    lines_to_add.append(
-                        {
-                            "product_id": uuid.UUID(dl["product_id"]),
-                            "product_variant_id": uuid.UUID(dl["product_variant_id"]) if dl.get("product_variant_id") else None,
-                            "quantity": dl.get("quantity", 1),
-                            "unit_price": None,
-                            "tax_rule_id": None,
-                        }
-                    )
+        template = (await db.execute(
+            select(QuotationTemplate).where(QuotationTemplate.id == payload.template_id)
+        )).scalar_one_or_none()
+        if not template:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quotation template not found.")
+        quote_valid_until = today + timedelta(days=template.validity_days)
+        if not line_inputs:
+            line_inputs = [
+                {
+                    "product_id": uuid.UUID(line["product_id"]),
+                    "product_variant_id": uuid.UUID(line["product_variant_id"]) if line.get("product_variant_id") else None,
+                    "quantity": line.get("quantity", 1),
+                    "unit_price": None,
+                    "tax_rule_id": None,
+                }
+                for line in (template.default_lines or [])
+            ]
+    elif payload.status == SubscriptionStatus.QUOTATION and quote_valid_until is None:
+        quote_valid_until = today + timedelta(days=30)
 
-    start = payload.start_date or date.today()
+    if payload.status == SubscriptionStatus.QUOTATION and quote_valid_until and quote_valid_until < today:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot create an already expired quotation.")
+
+    if expiry and start > expiry:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="start_date cannot be after expiry_date.")
+
+    prepared_lines = [await _prepare_line(db, line) for line in line_inputs]
+    purchased_quantity = max(1, sum(line["quantity"] for line in prepared_lines))
+    if purchased_quantity < plan.min_quantity:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plan '{plan.name}' requires a minimum quantity of {plan.min_quantity}; quote quantity is {purchased_quantity}.",
+        )
+
     anchor_day = payload.billing_anchor_day or start.day
     anchor_day = max(1, min(31, anchor_day))
-
-    # Next billing date initialization: if starting as active, due on start_date
-    next_bill = start if payload.status == SubscriptionStatus.ACTIVE else None
-
-    # 4. Generate unique subscription number
-    sub_num = await generate_subscription_number(db)
-
     sub = Subscription(
-        subscription_number=sub_num,
+        subscription_number=await generate_subscription_number(db),
         customer_account_id=customer.id,
         plan_id=plan.id,
         status=payload.status,
         start_date=start,
         expiry_date=expiry,
-        next_billing_date=next_bill,
+        quote_valid_until=quote_valid_until,
+        next_billing_date=None,
         billing_anchor_day=anchor_day,
         payment_terms_days=payload.payment_terms_days,
     )
     db.add(sub)
     await db.flush()
 
-    # 5. Populate Lines
-    created_lines = []
-    total_amount = Decimal(str(plan.base_price))
-
-    for line_data in lines_to_add:
-        p_id = line_data.product_id if hasattr(line_data, "product_id") else line_data["product_id"]
-        v_id = line_data.product_variant_id if hasattr(line_data, "product_variant_id") else line_data.get("product_variant_id")
-        qty = line_data.quantity if hasattr(line_data, "quantity") else line_data.get("quantity", 1)
-        req_price = line_data.unit_price if hasattr(line_data, "unit_price") else line_data.get("unit_price")
-        t_id = line_data.tax_rule_id if hasattr(line_data, "tax_rule_id") else line_data.get("tax_rule_id")
-
-        prod = (await db.execute(select(Product).where(Product.id == p_id))).scalar_one_or_none()
-        if not prod:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {p_id} not found.",
-            )
-
-        var = None
-        var_adjustment = Decimal("0.00")
-        if v_id:
-            var = (
-                await db.execute(
-                    select(ProductVariant).where(
-                        ProductVariant.id == v_id,
-                        ProductVariant.product_id == prod.id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if not var:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Variant {v_id} not found for product {prod.name}.",
-                )
-            var_adjustment = Decimal(str(var.price_adjustment))
-
-        if req_price is not None:
-            unit_price = _money(Decimal(str(req_price)))
-        else:
-            unit_price = _money(Decimal(str(prod.sales_price)) + var_adjustment)
-
-        sub_line = SubscriptionLine(
+    for line in prepared_lines:
+        db.add(SubscriptionLine(
             subscription_id=sub.id,
-            product_id=prod.id,
-            product_variant_id=var.id if var else None,
-            quantity=qty,
-            unit_price=unit_price,
-            tax_rule_id=t_id,
-        )
-        db.add(sub_line)
-        await db.flush()
-        created_lines.append(sub_line)
-        total_amount += _money(unit_price * qty)
+            product_id=line["product"].id,
+            product_variant_id=line["variant"].id if line["variant"] else None,
+            quantity=line["quantity"],
+            unit_price=line["unit_price"],
+            tax_rule_id=line["tax_rule_id"],
+        ))
 
-    # 6. Audit event
     action_name = "CREATE_QUOTATION" if sub.status == SubscriptionStatus.QUOTATION else "CREATE_SUBSCRIPTION"
     await record_audit_event(
         db,
@@ -358,48 +420,16 @@ async def create_subscription(
             "customer_name": customer.company_name,
             "plan_name": plan.name,
             "status": sub.status.value,
-            "line_count": len(created_lines),
-            "total_amount": str(total_amount),
+            "start_date": str(sub.start_date),
+            "expiry_date": str(sub.expiry_date) if sub.expiry_date else None,
+            "quote_valid_until": str(sub.quote_valid_until) if sub.quote_valid_until else None,
+            "line_count": len(prepared_lines),
         },
     )
 
     await db.commit()
-    await db.refresh(sub, ["customer_account", "plan", "lines"])
-
-    line_responses = []
-    for l in sub.lines:
-        line_price = Decimal(str(l.unit_price)) * l.quantity
-        line_responses.append(
-            SubscriptionLineResponse(
-                id=l.id,
-                product_id=l.product_id,
-                product_name=l.product.name if l.product else "Product",
-                product_variant_id=l.product_variant_id,
-                variant_name=l.variant.name if l.variant else None,
-                quantity=l.quantity,
-                unit_price=l.unit_price,
-                tax_rule_id=l.tax_rule_id,
-                tax_rate=Decimal(str(l.tax_rule.rate_percentage)) if l.tax_rule else None,
-                line_subtotal=_money(line_price),
-            )
-        )
-
-    return SubscriptionResponse(
-        id=sub.id,
-        subscription_number=sub.subscription_number,
-        customer_account_id=sub.customer_account_id,
-        customer_name=customer.company_name,
-        plan_id=sub.plan_id,
-        plan_name=plan.name,
-        status=sub.status,
-        start_date=sub.start_date,
-        expiry_date=sub.expiry_date,
-        next_billing_date=sub.next_billing_date,
-        billing_anchor_day=sub.billing_anchor_day,
-        payment_terms_days=sub.payment_terms_days,
-        total_amount=_money(total_amount),
-        lines=line_responses,
-    )
+    sub = await _reload_subscription(db, sub.id)
+    return _subscription_response(sub, await _calculate_subscription_charge(db, sub))
 
 
 @router.get(
@@ -428,26 +458,8 @@ async def get_subscription(
             detail="Subscription not found.",
         )
 
-    # Compute lines & totals
-    total = Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00")
-    line_responses = []
-    for line in sub.lines:
-        line_price = Decimal(str(line.unit_price)) * line.quantity
-        total += line_price
-        line_responses.append(
-            SubscriptionLineResponse(
-                id=line.id,
-                product_id=line.product_id,
-                product_name=line.product.name if line.product else "Product",
-                product_variant_id=line.product_variant_id,
-                variant_name=line.variant.name if line.variant else None,
-                quantity=line.quantity,
-                unit_price=line.unit_price,
-                tax_rule_id=line.tax_rule_id,
-                tax_rate=Decimal(str(line.tax_rule.rate_percentage)) if line.tax_rule else None,
-                line_subtotal=_money(line_price),
-            )
-        )
+    charge = await _calculate_subscription_charge(db, sub)
+    base_response = _subscription_response(sub, charge)
 
     # Traceable audit events
     audit_query = (
@@ -477,28 +489,15 @@ async def get_subscription(
         )
 
     return SubscriptionDetailResponse(
-        id=sub.id,
-        subscription_number=sub.subscription_number,
-        customer_account_id=sub.customer_account_id,
-        customer_name=sub.customer_account.company_name if sub.customer_account else "Unknown",
+        **base_response.model_dump(),
         customer_billing_email=sub.customer_account.billing_email if sub.customer_account else None,
         customer_address=sub.customer_account.billing_address_line1 if sub.customer_account else None,
-        plan_id=sub.plan_id,
-        plan_name=sub.plan.name if sub.plan else "Unknown",
         plan_cadence=sub.plan.cadence.value if sub.plan else None,
         plan_base_price=Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00"),
         plan_allow_pause=sub.plan.allow_pause if sub.plan else True,
         plan_allow_early_close=sub.plan.allow_early_close if sub.plan else True,
         plan_allow_renewal=sub.plan.allow_renewal if sub.plan else True,
         plan_auto_close_on_expiry=sub.plan.auto_close_on_expiry if sub.plan else False,
-        status=sub.status,
-        start_date=sub.start_date,
-        expiry_date=sub.expiry_date,
-        next_billing_date=sub.next_billing_date,
-        billing_anchor_day=sub.billing_anchor_day,
-        payment_terms_days=sub.payment_terms_days,
-        total_amount=_money(total),
-        lines=line_responses,
         audit_history=audit_items,
     )
 
@@ -538,75 +537,69 @@ async def update_subscription(
         )
 
     changes = {}
+    start = payload.start_date or sub.start_date
+    expiry = payload.expiry_date if payload.expiry_date is not None else sub.expiry_date
+    quote_valid_until = (
+        payload.quote_valid_until
+        if "quote_valid_until" in payload.model_fields_set
+        else sub.quote_valid_until
+    )
+    if expiry and start > expiry:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="start_date cannot be after expiry_date.")
+
+    plan = sub.plan
     if payload.plan_id is not None and payload.plan_id != sub.plan_id:
-        new_plan = (await db.execute(select(Plan).where(Plan.id == payload.plan_id))).scalar_one_or_none()
-        if not new_plan or not new_plan.is_active:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selected plan is invalid or inactive.")
-        changes["plan_id"] = {"from": str(sub.plan_id), "to": str(new_plan.id)}
-        sub.plan_id = new_plan.id
+        plan = (await db.execute(select(Plan).where(Plan.id == payload.plan_id))).scalar_one_or_none()
+        if not plan:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Plan {payload.plan_id} not found.")
+        changes["plan_id"] = {"from": str(sub.plan_id), "to": str(plan.id)}
+    if payload.plan_id is not None or payload.start_date is not None:
+        _validate_plan_availability(plan, start)
 
-    if payload.start_date is not None and payload.start_date != sub.start_date:
-        changes["start_date"] = {"from": str(sub.start_date), "to": str(payload.start_date)}
-        sub.start_date = payload.start_date
+    prepared_lines = None
+    if payload.lines is not None:
+        prepared_lines = [await _prepare_line(db, line) for line in payload.lines]
+        changes["lines_updated"] = len(prepared_lines)
+        requested_quantity = max(1, sum(line["quantity"] for line in prepared_lines))
+    else:
+        requested_quantity = max(1, sum(line.quantity for line in sub.lines))
+    if (prepared_lines is not None or plan.id != sub.plan_id) and requested_quantity < plan.min_quantity:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plan '{plan.name}' requires a minimum quantity of {plan.min_quantity}; quote quantity is {requested_quantity}.",
+        )
 
-    if payload.expiry_date is not None and payload.expiry_date != sub.expiry_date:
-        changes["expiry_date"] = {"from": str(sub.expiry_date), "to": str(payload.expiry_date)}
-        sub.expiry_date = payload.expiry_date
-
+    if start != sub.start_date:
+        changes["start_date"] = {"from": str(sub.start_date), "to": str(start)}
+        sub.start_date = start
+    if expiry != sub.expiry_date:
+        changes["expiry_date"] = {"from": str(sub.expiry_date), "to": str(expiry)}
+        sub.expiry_date = expiry
+    if quote_valid_until != sub.quote_valid_until:
+        changes["quote_valid_until"] = {"from": str(sub.quote_valid_until), "to": str(quote_valid_until)}
+        sub.quote_valid_until = quote_valid_until
+    if payload.plan_id is not None and plan.id != sub.plan_id:
+        sub.plan_id = plan.id
     if payload.billing_anchor_day is not None and payload.billing_anchor_day != sub.billing_anchor_day:
         changes["billing_anchor_day"] = {"from": sub.billing_anchor_day, "to": payload.billing_anchor_day}
         sub.billing_anchor_day = payload.billing_anchor_day
-
     if payload.payment_terms_days is not None and payload.payment_terms_days != sub.payment_terms_days:
         changes["payment_terms_days"] = {"from": sub.payment_terms_days, "to": payload.payment_terms_days}
         sub.payment_terms_days = payload.payment_terms_days
 
-    # Update line items if provided
-    if payload.lines is not None:
-        # Delete old lines
+    if prepared_lines is not None:
         for old_line in sub.lines:
             await db.delete(old_line)
         await db.flush()
-
-        changes["lines_updated"] = len(payload.lines)
-
-        for line_data in payload.lines:
-            prod = (await db.execute(select(Product).where(Product.id == line_data.product_id))).scalar_one_or_none()
-            if not prod:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Product {line_data.product_id} not found.")
-
-            var = None
-            var_adjustment = Decimal("0.00")
-            if line_data.product_variant_id:
-                var = (
-                    await db.execute(
-                        select(ProductVariant).where(
-                            ProductVariant.id == line_data.product_variant_id,
-                            ProductVariant.product_id == prod.id,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if not var:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Variant {line_data.product_variant_id} not found for product {prod.name}.",
-                    )
-                var_adjustment = Decimal(str(var.price_adjustment))
-
-            if line_data.unit_price is not None:
-                unit_price = _money(Decimal(str(line_data.unit_price)))
-            else:
-                unit_price = _money(Decimal(str(prod.sales_price)) + var_adjustment)
-
-            new_line = SubscriptionLine(
+        for line in prepared_lines:
+            db.add(SubscriptionLine(
                 subscription_id=sub.id,
-                product_id=prod.id,
-                product_variant_id=var.id if var else None,
-                quantity=line_data.quantity,
-                unit_price=unit_price,
-                tax_rule_id=line_data.tax_rule_id,
-            )
-            db.add(new_line)
+                product_id=line["product"].id,
+                product_variant_id=line["variant"].id if line["variant"] else None,
+                quantity=line["quantity"],
+                unit_price=line["unit_price"],
+                tax_rule_id=line["tax_rule_id"],
+            ))
 
     if changes:
         await record_audit_event(
@@ -618,45 +611,8 @@ async def update_subscription(
             changes=changes,
         )
         await db.commit()
-        await db.refresh(sub, ["customer_account", "plan", "lines"])
-
-    # Format response
-    total = Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00")
-    line_responses = []
-    for line in sub.lines:
-        line_price = Decimal(str(line.unit_price)) * line.quantity
-        total += line_price
-        line_responses.append(
-            SubscriptionLineResponse(
-                id=line.id,
-                product_id=line.product_id,
-                product_name=line.product.name if line.product else "Product",
-                product_variant_id=line.product_variant_id,
-                variant_name=line.variant.name if line.variant else None,
-                quantity=line.quantity,
-                unit_price=line.unit_price,
-                tax_rule_id=line.tax_rule_id,
-                tax_rate=Decimal(str(line.tax_rule.rate_percentage)) if line.tax_rule else None,
-                line_subtotal=_money(line_price),
-            )
-        )
-
-    return SubscriptionResponse(
-        id=sub.id,
-        subscription_number=sub.subscription_number,
-        customer_account_id=sub.customer_account_id,
-        customer_name=sub.customer_account.company_name if sub.customer_account else "Unknown",
-        plan_id=sub.plan_id,
-        plan_name=sub.plan.name if sub.plan else "Unknown",
-        status=sub.status,
-        start_date=sub.start_date,
-        expiry_date=sub.expiry_date,
-        next_billing_date=sub.next_billing_date,
-        billing_anchor_day=sub.billing_anchor_day,
-        payment_terms_days=sub.payment_terms_days,
-        total_amount=_money(total),
-        lines=line_responses,
-    )
+    sub = await _reload_subscription(db, sub.id)
+    return _subscription_response(sub, await _calculate_subscription_charge(db, sub))
 
 
 @router.post(
@@ -673,7 +629,7 @@ async def transition_subscription_status(
     """
     Manage quotation and subscription state transitions with plan policy checks:
     - issue_quote: DRAFT -> QUOTATION
-    - confirm: QUOTATION/DRAFT -> CONFIRMED (Customer accepted quote)
+    - confirm: QUOTATION -> CONFIRMED (Customer accepted quote)
     - activate: CONFIRMED -> ACTIVE (Calculates initial next_billing_date)
     - pause: ACTIVE -> PAUSED (Checks plan.allow_pause)
     - resume: PAUSED -> ACTIVE
@@ -691,6 +647,7 @@ async def transition_subscription_status(
 
     action = payload.action.strip().lower()
     old_status = sub.status
+    today = organization_today()
 
     if action == "issue_quote":
         if sub.status != SubscriptionStatus.DRAFT:
@@ -698,9 +655,11 @@ async def transition_subscription_status(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cannot issue quote: current status is '{sub.status.value}' (expected 'draft').",
             )
+        if sub.quote_valid_until and sub.quote_valid_until < today:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot issue an expired quotation.")
         sub.status = SubscriptionStatus.QUOTATION
-        if not sub.expiry_date:
-            sub.expiry_date = sub.start_date + timedelta(days=30)
+        if not sub.quote_valid_until:
+            sub.quote_valid_until = today + timedelta(days=30)
 
         await record_audit_event(
             db,
@@ -708,15 +667,22 @@ async def transition_subscription_status(
             entity_id=sub.id,
             action="ISSUE_QUOTATION",
             actor_user_id=current_user.id,
-            changes={"old_status": old_status.value, "new_status": sub.status.value, "reason": payload.reason},
+            changes={
+                "old_status": old_status.value,
+                "new_status": sub.status.value,
+                "quote_valid_until": str(sub.quote_valid_until),
+                "reason": payload.reason,
+            },
         )
 
     elif action == "confirm":
-        if sub.status not in [SubscriptionStatus.QUOTATION, SubscriptionStatus.DRAFT]:
+        if sub.status != SubscriptionStatus.QUOTATION:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot confirm: current status is '{sub.status.value}'.",
+                detail=f"Cannot confirm: current status is '{sub.status.value}' (a quotation must be issued first).",
             )
+        if sub.quote_valid_until and sub.quote_valid_until < today:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This quotation has expired and cannot be confirmed.")
         sub.status = SubscriptionStatus.CONFIRMED
         await record_audit_event(
             db,
@@ -738,6 +704,8 @@ async def transition_subscription_status(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Plan '{sub.plan.name}' is archived. Update to an active plan before activation.",
             )
+        if sub.expiry_date and sub.expiry_date < today:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An expired subscription cannot be activated.")
         sub.status = SubscriptionStatus.ACTIVE
         sub.next_billing_date = sub.start_date
 
@@ -782,8 +750,10 @@ async def transition_subscription_status(
                 detail="Only paused subscriptions can be resumed.",
             )
         sub.status = SubscriptionStatus.ACTIVE
-        if sub.next_billing_date and sub.next_billing_date < date.today():
-            sub.next_billing_date = date.today()
+        if sub.expiry_date and sub.expiry_date < today:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An expired subscription cannot be resumed.")
+        if sub.next_billing_date and sub.next_billing_date < today:
+            sub.next_billing_date = today
 
         await record_audit_event(
             db,
@@ -822,7 +792,7 @@ async def transition_subscription_status(
             else:
                 extension_days = 30
 
-        current_end = sub.expiry_date or date.today()
+        current_end = sub.expiry_date or today
         new_end = current_end + timedelta(days=extension_days)
         old_end_str = str(sub.expiry_date) if sub.expiry_date else None
         sub.expiry_date = new_end
@@ -847,8 +817,7 @@ async def transition_subscription_status(
                 detail="Subscription is already closed.",
             )
         # Check early close policy if active and before expiration date
-        today = date.today()
-        if sub.status == SubscriptionStatus.ACTIVE and sub.expiry_date and today < sub.expiry_date:
+        if sub.status in [SubscriptionStatus.ACTIVE, SubscriptionStatus.PAUSED] and sub.expiry_date and today < sub.expiry_date:
             if sub.plan and not sub.plan.allow_early_close:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -872,45 +841,8 @@ async def transition_subscription_status(
         )
 
     await db.commit()
-    await db.refresh(sub, ["customer_account", "plan", "lines"])
-
-    # Compute response
-    total = Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00")
-    line_responses = []
-    for line in sub.lines:
-        line_price = Decimal(str(line.unit_price)) * line.quantity
-        total += line_price
-        line_responses.append(
-            SubscriptionLineResponse(
-                id=line.id,
-                product_id=line.product_id,
-                product_name=line.product.name if line.product else "Product",
-                product_variant_id=line.product_variant_id,
-                variant_name=line.variant.name if line.variant else None,
-                quantity=line.quantity,
-                unit_price=line.unit_price,
-                tax_rule_id=line.tax_rule_id,
-                tax_rate=Decimal(str(line.tax_rule.rate_percentage)) if line.tax_rule else None,
-                line_subtotal=_money(line_price),
-            )
-        )
-
-    return SubscriptionResponse(
-        id=sub.id,
-        subscription_number=sub.subscription_number,
-        customer_account_id=sub.customer_account_id,
-        customer_name=sub.customer_account.company_name if sub.customer_account else "Unknown",
-        plan_id=sub.plan_id,
-        plan_name=sub.plan.name if sub.plan else "Unknown",
-        status=sub.status,
-        start_date=sub.start_date,
-        expiry_date=sub.expiry_date,
-        next_billing_date=sub.next_billing_date,
-        billing_anchor_day=sub.billing_anchor_day,
-        payment_terms_days=sub.payment_terms_days,
-        total_amount=_money(total),
-        lines=line_responses,
-    )
+    sub = await _reload_subscription(db, sub.id)
+    return _subscription_response(sub, await _calculate_subscription_charge(db, sub))
 
 
 @router.get(

@@ -27,6 +27,20 @@ class SubscriptionLineResponse(BaseModel):
     tax_rule_id: Optional[uuid.UUID] = None
     tax_rate: Optional[Decimal] = None
     line_subtotal: Decimal = Decimal("0.00")
+    discount_amount: Decimal = Decimal("0.00")
+    tax_amount: Decimal = Decimal("0.00")
+    line_total: Decimal = Decimal("0.00")
+
+
+class SubscriptionPlanChargeResponse(BaseModel):
+    quantity: int = 1
+    unit_price: Decimal
+    subtotal: Decimal
+    discount_amount: Decimal = Decimal("0.00")
+    tax_name: Optional[str] = None
+    tax_rate: Decimal = Decimal("0.00")
+    tax_amount: Decimal = Decimal("0.00")
+    line_total: Decimal = Decimal("0.00")
 
 
 class SubscriptionCreate(BaseModel):
@@ -35,6 +49,7 @@ class SubscriptionCreate(BaseModel):
     template_id: Optional[uuid.UUID] = None
     start_date: Optional[date] = None
     expiry_date: Optional[date] = None
+    quote_valid_until: Optional[date] = None
     billing_anchor_day: Optional[int] = Field(None, ge=1, le=31)
     payment_terms_days: int = Field(default=15, ge=0)
     status: SubscriptionStatus = SubscriptionStatus.DRAFT
@@ -44,6 +59,8 @@ class SubscriptionCreate(BaseModel):
     def validate_dates(self):
         if self.start_date and self.expiry_date and self.start_date > self.expiry_date:
             raise ValueError("start_date cannot be after expiry_date")
+        if self.status not in (SubscriptionStatus.DRAFT, SubscriptionStatus.QUOTATION):
+            raise ValueError("Subscriptions must be created as draft or quotation; use lifecycle actions to advance status")
         return self
 
 
@@ -51,6 +68,7 @@ class SubscriptionUpdate(BaseModel):
     plan_id: Optional[uuid.UUID] = None
     start_date: Optional[date] = None
     expiry_date: Optional[date] = None
+    quote_valid_until: Optional[date] = None
     billing_anchor_day: Optional[int] = Field(None, ge=1, le=31)
     payment_terms_days: Optional[int] = Field(None, ge=0)
     lines: Optional[List[SubscriptionLineCreate]] = None
@@ -91,10 +109,16 @@ class SubscriptionResponse(BaseModel):
     status: SubscriptionStatus
     start_date: date
     expiry_date: Optional[date] = None
+    quote_valid_until: Optional[date] = None
     next_billing_date: Optional[date] = None
     billing_anchor_day: int
     payment_terms_days: int
+    plan_charge: Optional[SubscriptionPlanChargeResponse] = None
+    subtotal_amount: Decimal = Decimal("0.00")
+    discount_amount: Decimal = Decimal("0.00")
+    tax_amount: Decimal = Decimal("0.00")
     total_amount: Decimal = Decimal("0.00")
+    calculation_warnings: List[str] = []
     lines: List[SubscriptionLineResponse] = []
 
 

@@ -101,8 +101,8 @@ export interface UpdatePlanPayload {
   cadence?: string;
   base_price?: number | string;
   min_quantity?: number;
-  available_from?: string;
-  available_to?: string;
+  available_from?: string | null;
+  available_to?: string | null;
   auto_close_on_expiry?: boolean;
   allow_early_close?: boolean;
   allow_pause?: boolean;
@@ -170,7 +170,7 @@ export interface UpdateDiscountRulePayload {
   target_product_id?: string;
   min_spend?: number | string;
   min_quantity?: number;
-  max_usage_limit?: number;
+  max_usage_limit?: number | null;
   valid_from?: string;
   valid_to?: string;
   is_active?: boolean;
@@ -273,6 +273,20 @@ export interface SubscriptionLineItem {
   tax_rule_id?: string | null;
   tax_rate?: MoneyValue | null;
   line_subtotal: MoneyValue;
+  discount_amount: MoneyValue;
+  tax_amount: MoneyValue;
+  line_total: MoneyValue;
+}
+
+export interface SubscriptionPlanCharge {
+  quantity: number;
+  unit_price: MoneyValue;
+  subtotal: MoneyValue;
+  discount_amount: MoneyValue;
+  tax_name?: string | null;
+  tax_rate: MoneyValue;
+  tax_amount: MoneyValue;
+  line_total: MoneyValue;
 }
 
 export interface SubscriptionDetailApiItem {
@@ -293,10 +307,16 @@ export interface SubscriptionDetailApiItem {
   status: string;
   start_date: string;
   expiry_date?: string | null;
+  quote_valid_until?: string | null;
   next_billing_date?: string | null;
   billing_anchor_day: number;
   payment_terms_days: number;
+  plan_charge?: SubscriptionPlanCharge | null;
+  subtotal_amount: MoneyValue;
+  discount_amount: MoneyValue;
+  tax_amount: MoneyValue;
   total_amount: MoneyValue;
+  calculation_warnings: string[];
   lines: SubscriptionLineItem[];
   audit_history: SubscriptionAuditItem[];
 }
@@ -307,6 +327,7 @@ export interface CreateSubscriptionPayload {
   template_id?: string;
   start_date?: string;
   expiry_date?: string;
+  quote_valid_until?: string;
   billing_anchor_day?: number;
   payment_terms_days?: number;
   status?: string;
@@ -323,6 +344,7 @@ export interface UpdateSubscriptionPayload {
   plan_id?: string;
   start_date?: string;
   expiry_date?: string;
+  quote_valid_until?: string;
   billing_anchor_day?: number;
   payment_terms_days?: number;
   lines?: {
@@ -347,10 +369,14 @@ export interface SubscriptionApiItem {
   customer_name: string;
   plan_name: string;
   status: string;
+  subtotal_amount: MoneyValue;
+  discount_amount: MoneyValue;
+  tax_amount: MoneyValue;
   total_amount: MoneyValue;
   next_billing_date?: string | null;
   start_date?: string | null;
   expiry_date?: string | null;
+  quote_valid_until?: string | null;
   lines: { id: string; product_name?: string | null; quantity: number; unit_price: MoneyValue }[];
 }
 

@@ -56,6 +56,7 @@ class Subscription(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    quote_valid_until: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     next_billing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
     billing_anchor_day: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     payment_terms_days: Mapped[int] = mapped_column(Integer, default=15, nullable=False)

@@ -108,12 +108,27 @@ async def test_create_quote_from_template_and_unique_numbering(client: AsyncClie
     assert quote["status"] == "quotation"
     assert quote["customer_name"] == customer_account.company_name
     assert quote["plan_name"] == plan.name
-    # Expiry date auto-calculated from template validity (15 days)
-    expected_expiry = (today + timedelta(days=15)).isoformat()
-    assert quote["expiry_date"] == expected_expiry
+    # Quote validity is separate from the subscription's contract end date.
+    expected_quote_validity = (today + timedelta(days=15)).isoformat()
+    assert quote["quote_valid_until"] == expected_quote_validity
+    assert quote["expiry_date"] is None
     # Lines auto-populated from template
     assert len(quote["lines"]) == 1
     assert quote["lines"][0]["quantity"] == 3
+    assert Decimal(quote["subtotal_amount"]) == Decimal("500.00")
+    assert Decimal(quote["total_amount"]) == Decimal("500.00")
+
+    second_quote_res = await client.post(
+        "/api/v1/subscriptions",
+        json={
+            "customer_account_id": str(customer_account.id),
+            "plan_id": str(plan.id),
+            "status": "quotation",
+        },
+        cookies=staff_cookies,
+    )
+    assert second_quote_res.status_code == 201
+    assert second_quote_res.json()["subscription_number"] != quote["subscription_number"]
 
 
 @pytest.mark.asyncio
@@ -153,7 +168,7 @@ async def test_subscription_lifecycle_and_traceable_audit_history(client: AsyncC
     )
     assert res_quote.status_code == 200
     assert res_quote.json()["status"] == "quotation"
-    assert res_quote.json()["expiry_date"] is not None
+    assert res_quote.json()["quote_valid_until"] is not None
 
     # 3. Customer accepts quote -> CONFIRMED
     res_conf = await client.post(
@@ -230,6 +245,7 @@ async def test_pause_resume_policies(client: AsyncClient, seed_users):
         cookies=admin_cookies,
     )
     sub_id = sub_res.json()["id"]
+    await client.post(f"/api/v1/subscriptions/{sub_id}/status", json={"action": "issue_quote"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{sub_id}/status", json={"action": "confirm"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{sub_id}/status", json={"action": "activate"}, cookies=admin_cookies)
 
@@ -266,6 +282,7 @@ async def test_pause_resume_policies(client: AsyncClient, seed_users):
         cookies=admin_cookies,
     )
     sub2_id = sub2_res.json()["id"]
+    await client.post(f"/api/v1/subscriptions/{sub2_id}/status", json={"action": "issue_quote"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{sub2_id}/status", json={"action": "confirm"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{sub2_id}/status", json={"action": "activate"}, cookies=admin_cookies)
 
@@ -326,6 +343,7 @@ async def test_renewal_and_early_close_policies(client: AsyncClient, seed_users)
         cookies=admin_cookies,
     )
     sub_id = sub_res.json()["id"]
+    await client.post(f"/api/v1/subscriptions/{sub_id}/status", json={"action": "issue_quote"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{sub_id}/status", json={"action": "confirm"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{sub_id}/status", json={"action": "activate"}, cookies=admin_cookies)
 
@@ -373,6 +391,7 @@ async def test_renewal_and_early_close_policies(client: AsyncClient, seed_users)
         cookies=admin_cookies,
     )
     flex_sub_id = sub_flex_res.json()["id"]
+    await client.post(f"/api/v1/subscriptions/{flex_sub_id}/status", json={"action": "issue_quote"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{flex_sub_id}/status", json={"action": "confirm"}, cookies=admin_cookies)
     await client.post(f"/api/v1/subscriptions/{flex_sub_id}/status", json={"action": "activate"}, cookies=admin_cookies)
 
@@ -394,3 +413,64 @@ async def test_renewal_and_early_close_policies(client: AsyncClient, seed_users)
     )
     assert close_ok.status_code == 200
     assert close_ok.json()["status"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_guards_and_tax_inclusive_quote_totals(client: AsyncClient, seed_users):
+    admin = seed_users["admin"]
+    customer_account = seed_users["account_a"]
+    plan = seed_users["plan"]
+    product = seed_users["product"]
+    admin_cookies = auth_cookies(admin)
+
+    tax_res = await client.post(
+        "/api/v1/tax-rules",
+        json={"name": "Phase 4 GST", "rate_percentage": "10.00"},
+        cookies=admin_cookies,
+    )
+    assert tax_res.status_code == 201
+    tax_id = tax_res.json()["id"]
+
+    blocked_active = await client.post(
+        "/api/v1/subscriptions",
+        json={
+            "customer_account_id": str(customer_account.id),
+            "plan_id": str(plan.id),
+            "status": "active",
+        },
+        cookies=admin_cookies,
+    )
+    assert blocked_active.status_code == 422
+
+    created = await client.post(
+        "/api/v1/subscriptions",
+        json={
+            "customer_account_id": str(customer_account.id),
+            "plan_id": str(plan.id),
+            "status": "draft",
+            "lines": [{"product_id": str(product.id), "quantity": 1, "tax_rule_id": tax_id}],
+        },
+        cookies=admin_cookies,
+    )
+    assert created.status_code == 201
+    subscription_id = created.json()["id"]
+    direct_confirm = await client.post(
+        f"/api/v1/subscriptions/{subscription_id}/status",
+        json={"action": "confirm"},
+        cookies=admin_cookies,
+    )
+    assert direct_confirm.status_code == 400
+    assert "quotation must be issued first" in direct_confirm.json()["detail"]
+
+    issued = await client.post(
+        f"/api/v1/subscriptions/{subscription_id}/status",
+        json={"action": "issue_quote"},
+        cookies=admin_cookies,
+    )
+    assert issued.status_code == 200
+    quote = issued.json()
+    assert Decimal(quote["subtotal_amount"]) == Decimal("300.00")
+    assert Decimal(quote["tax_amount"]) == Decimal("30.00")
+    assert Decimal(quote["total_amount"]) == Decimal("330.00")
+    assert Decimal(quote["plan_charge"]["tax_amount"]) == Decimal("20.00")
+    assert Decimal(quote["lines"][0]["tax_amount"]) == Decimal("10.00")

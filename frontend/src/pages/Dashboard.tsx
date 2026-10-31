@@ -4,7 +4,7 @@ import { TrendingUp, Users, CalendarCheck, AlertTriangle, ArrowUpRight, DollarSi
 
 export const Dashboard: React.FC = () => {
   const { user } = useAuth();
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user?.role === 'admin';
 
   return (
     <div className="space-y-6">

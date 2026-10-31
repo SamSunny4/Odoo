@@ -15,7 +15,7 @@ interface ProductItem {
 
 export const Catalog: React.FC = () => {
   const { user } = useAuth();
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user?.role === 'admin';
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
@@ -56,7 +56,7 @@ export const Catalog: React.FC = () => {
 
   useEffect(() => {
     fetchProducts();
-  }, [user.role]);
+  }, [user?.role]);
 
   return (
     <div className="space-y-6">

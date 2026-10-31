@@ -1,8 +1,15 @@
+import hashlib
+import secrets
+import smtplib
+from email.message import EmailMessage
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import verify_password, get_password_hash, create_access_token
 from app.models.user import User, UserRole, PasswordResetToken
@@ -137,30 +144,50 @@ async def get_current_profile(
 @router.post("/forgot-password", tags=["Auth"])
 async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
     """
-    Initiate single-use password reset link delivered to registered email.
+    Initiate single-use password reset link.
+    Stores token hashed with SHA-256 and delivers reset link via SMTP.
     """
-    import secrets
-    from datetime import datetime, timedelta, timezone
-
     normalized_email = payload.email.lower().strip()
     query = select(User).where(User.email == normalized_email)
     user = (await db.execute(query)).scalar_one_or_none()
 
-    # Always return success message to avoid user enumeration
+    # Always return generic message to avoid email enumeration
     if user and user.is_active:
-        token_str = secrets.token_urlsafe(32)
+        raw_token = secrets.token_urlsafe(32)
+        hashed_token = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
         reset_token = PasswordResetToken(
             user_id=user.id,
-            token=token_str,
+            token=hashed_token,
             expires_at=expires_at,
             is_used=False,
         )
         db.add(reset_token)
         await db.commit()
 
-        # In production/local, this triggers email delivery; for demonstration we log it
-        print(f"[Mail Delivery] Password reset link for {user.email}: token={token_str}")
+        # Send password reset email via configured SMTP (Mailpit in dev)
+        msg = EmailMessage()
+        msg["Subject"] = "Password Reset Request — Brightloop Software"
+        msg["From"] = settings.SMTP_FROM
+        msg["To"] = user.email
+
+        reset_link = f"http://localhost:5173/reset-password?token={raw_token}"
+        msg.set_content(
+            f"Hello {user.full_name},\n\n"
+            f"A password reset request was initiated for your Brightloop account.\n\n"
+            f"Use the following secure link within 1 hour to reset your password:\n"
+            f"{reset_link}\n\n"
+            f"If you did not request this, please disregard this email.\n\n"
+            f"Brightloop Security Team"
+        )
+
+        try:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=5) as server:
+                server.send_message(msg)
+        except Exception as exc:
+            # Fallback for offline dev
+            print(f"[Auth] SMTP dispatch failed ({exc}). Password reset queued for {user.email}")
 
     return {
         "message": "If an account with that email exists, password reset instructions have been dispatched."
@@ -171,12 +198,12 @@ async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Dep
 async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
     """
     Complete password reset with single-use expirable token.
-    Enforces password complexity policy.
+    Validates token against stored SHA-256 hash and enforces password complexity policy.
     """
-    from datetime import datetime, timezone
+    hashed_token = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
 
     query = select(PasswordResetToken).where(
-        PasswordResetToken.token == payload.token,
+        PasswordResetToken.token == hashed_token,
         PasswordResetToken.is_used == False,  # noqa: E712
     )
     token_record = (await db.execute(query)).scalar_one_or_none()
@@ -202,10 +229,9 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
             detail="User account not found.",
         )
 
-    # Update password and mark token used
+    # Update password and invalidate token
     user.hashed_password = get_password_hash(payload.new_password)
     token_record.is_used = True
     await db.commit()
 
     return {"message": "Password successfully reset. You may now sign in with your new credentials."}
-

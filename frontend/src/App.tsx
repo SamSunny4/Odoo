@@ -8,14 +8,14 @@ import { Catalog } from './pages/Catalog';
 import { Subscriptions } from './pages/Subscriptions';
 import { Invoices } from './pages/Invoices';
 import { CustomerPortal } from './pages/CustomerPortal';
+import { Login } from './pages/Login';
 
 export const AppContent: React.FC = () => {
-  const { user } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
 
-  // Sync tab with role
   useEffect(() => {
-    if (user.role === 'customer') {
+    if (user?.role === 'customer') {
       if (!currentTab.startsWith('portal-')) {
         setCurrentTab('portal-subscriptions');
       }
@@ -24,7 +24,19 @@ export const AppContent: React.FC = () => {
         setCurrentTab('dashboard');
       }
     }
-  }, [user.role]);
+  }, [user?.role]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center text-slate-500 text-sm">
+        Restoring session...
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !user) {
+    return <Login />;
+  }
 
   const renderContent = () => {
     if (user.role === 'customer') {
@@ -74,4 +86,3 @@ export const AppContent: React.FC = () => {
 export default function App() {
   return <AppContent />;
 }
-

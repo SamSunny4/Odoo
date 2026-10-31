@@ -21,7 +21,7 @@ interface SimulatedItem {
 
 export const ControlTower: React.FC = () => {
   const { user } = useAuth();
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user?.role === 'admin';
   const [items, setItems] = useState<SimulatedItem[]>([]);
   const [period, setPeriod] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const [totalProjected, setTotalProjected] = useState<number>(0);

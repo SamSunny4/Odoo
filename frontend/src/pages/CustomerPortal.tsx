@@ -47,8 +47,8 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
         },
       ]);
       setProfile({
-        company_name: user.companyName || 'Acme Corporation',
-        billing_email: user.email,
+        company_name: user?.companyName || 'Acme Corporation',
+        billing_email: user?.email || '',
         phone: '+1 (555) 234-5678',
         tax_id: 'US-TAX-987654321',
         billing_address: '100 Innovation Blvd, Austin, TX 78701, US',
@@ -62,7 +62,7 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
 
   useEffect(() => {
     fetchPortalData();
-  }, [user.id]);
+  }, [user?.id]);
 
   return (
     <div className="space-y-6">
@@ -74,7 +74,7 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900">{profile?.company_name || user.companyName || 'Acme Corporation'}</h1>
+              <h1 className="text-xl font-bold text-slate-900">{profile?.company_name || user?.companyName || 'Acme Corporation'}</h1>
               <span
                 className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
                   isLive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
@@ -84,7 +84,7 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Customer Portal • Signed in as <span className="font-semibold">{user.email}</span> (Derived Session Scope)
+              Customer Portal • Signed in as <span className="font-semibold">{user?.email || 'Customer'}</span> (Derived Session Scope)
             </p>
           </div>
         </div>

@@ -31,7 +31,7 @@ async def list_payments(
 async def record_payment(
     payload: RecordPaymentRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_staff_or_admin),
 ):
     """
     Record an append-only payment against an invoice.

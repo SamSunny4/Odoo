@@ -23,7 +23,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
   const { user } = useAuth();
 
   const renderNavLinks = () => {
-    if (user.role === 'customer') {
+    if (user?.role === 'customer') {
       return (
         <div className="space-y-1">
           <div className="px-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -83,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
               }`}
             >
               <LayoutDashboard className="w-4 h-4" />
-              {user.role === 'admin' ? 'Finance Dashboard' : 'Operations Queue'}
+              {user?.role === 'admin' ? 'Finance Dashboard' : 'Operations Queue'}
             </button>
             <button
               onClick={() => onSelectTab('subscriptions')}
@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => 
             </button>
 
             {/* Admin-only configuration */}
-            {user.role === 'admin' && (
+            {user?.role === 'admin' && (
               <>
                 <button
                   onClick={() => onSelectTab('plans')}

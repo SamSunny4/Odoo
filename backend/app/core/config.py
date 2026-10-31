@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "insecure-change-in-production-brightloop-secret-key-32-chars-min"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    SESSION_COOKIE_NAME: str = "brightloop_session"
+    SESSION_COOKIE_SECURE: bool = False
+    SESSION_COOKIE_SAMESITE: str = "lax"
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/brightloop_subscriptions"

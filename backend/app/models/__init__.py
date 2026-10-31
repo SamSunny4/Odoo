@@ -11,6 +11,7 @@ from app.models.billing_run import BillingRun, BillingRunItem, BillingRunStatus,
 from app.models.invoice import Invoice, InvoiceLine, InvoiceStatus, SendStatus
 from app.models.payment import Payment, PaymentReversal, PaymentMethod
 from app.models.audit import AuditEvent
+from app.models.outbox import OutboxMessage, OutboxMessageStatus
 
 __all__ = [
     "Base",
@@ -47,5 +48,7 @@ __all__ = [
     "PaymentReversal",
     "PaymentMethod",
     "AuditEvent",
+    "OutboxMessage",
+    "OutboxMessageStatus",
 ]
 

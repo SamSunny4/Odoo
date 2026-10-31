@@ -21,6 +21,8 @@ from app.models.invoice import Invoice, InvoiceLine, InvoiceStatus, SendStatus
 from app.models.plan import BillingCadence
 from app.models.subscription import Subscription, SubscriptionLine, SubscriptionStatus
 from app.models.tax import TaxRule
+from app.services.audit import record_audit_event
+from app.services.outbox import create_outbox_message
 
 CENT = Decimal("0.01")
 
@@ -525,10 +527,39 @@ async def commit_billing_preview(
         item.resulting_invoice_id = invoice.id
         total_committed += charge.total
         created_invoices.append(invoice)
+        await record_audit_event(
+            db,
+            entity_type="invoice",
+            entity_id=invoice.id,
+            action="CREATE",
+            actor_user_id=actor_user_id,
+            changes={"invoice_number": invoice.invoice_number, "total_amount": str(invoice.total_amount)},
+        )
+        if account and account.billing_email:
+            await create_outbox_message(
+                db,
+                topic="email",
+                payload={
+                    "type": "invoice_issued",
+                    "invoice_id": str(invoice.id),
+                    "invoice_number": invoice.invoice_number,
+                    "recipient_email": account.billing_email,
+                    "total_amount": str(invoice.total_amount),
+                    "due_date": invoice.due_date.isoformat(),
+                },
+            )
 
     run.status = BillingRunStatus.COMMITTED
     run.committed_by_user_id = actor_user_id
     run.committed_at = datetime.now(timezone.utc)
     run.total_amount_projected = total_committed
+    await record_audit_event(
+        db,
+        entity_type="billing_run",
+        entity_id=run.id,
+        action="COMMIT",
+        actor_user_id=actor_user_id,
+        changes={"invoices_created": len(created_invoices), "total_amount": str(total_committed)},
+    )
     await db.commit()
     return run, created_invoices

@@ -13,6 +13,7 @@ from app.models.plan import Plan
 from app.models.catalog import Product, ProductVariant
 from app.schemas.subscription import SubscriptionResponse, SubscriptionLineResponse
 from app.api.v1.deps import require_staff_or_admin
+from app.services.audit import record_audit_event
 
 router = APIRouter()
 
@@ -97,6 +98,14 @@ async def pause_subscription(
         raise HTTPException(status_code=400, detail="Plan policy does not permit pausing.")
 
     sub.status = SubscriptionStatus.PAUSED
+    await record_audit_event(
+        db,
+        entity_type="subscription",
+        entity_id=sub.id,
+        action="PAUSE",
+        actor_user_id=_user.id,
+        changes={"subscription_number": sub.subscription_number, "status": sub.status.value},
+    )
     await db.commit()
     return {"message": f"Subscription {sub.subscription_number} has been paused.", "status": sub.status}
 
@@ -117,5 +126,13 @@ async def resume_subscription(
         raise HTTPException(status_code=400, detail="Only paused subscriptions can be resumed.")
 
     sub.status = SubscriptionStatus.ACTIVE
+    await record_audit_event(
+        db,
+        entity_type="subscription",
+        entity_id=sub.id,
+        action="RESUME",
+        actor_user_id=_user.id,
+        changes={"subscription_number": sub.subscription_number, "status": sub.status.value},
+    )
     await db.commit()
     return {"message": f"Subscription {sub.subscription_number} has been resumed.", "status": sub.status}

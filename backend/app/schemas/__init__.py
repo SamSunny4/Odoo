@@ -7,6 +7,8 @@ from app.schemas.auth import (
     UserResponse,
     CustomerAccountSummary,
     AuthMeResponse,
+    CreateStaffRequest,
+    UpdateStaffRequest,
 )
 
 __all__ = [
@@ -18,5 +20,7 @@ __all__ = [
     "UserResponse",
     "CustomerAccountSummary",
     "AuthMeResponse",
+    "CreateStaffRequest",
+    "UpdateStaffRequest",
 ]
 

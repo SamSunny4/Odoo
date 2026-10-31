@@ -15,7 +15,7 @@ interface AuthContextType {
   user: User | null;
   login: (email: string, pass: string) => Promise<void>;
   signup: (data: Record<string, unknown>) => Promise<void>;
-  logout: () => void;
+  logout: () => void | Promise<void>;
   switchRole: (role: UserRole) => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -25,20 +25,11 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return !!localStorage.getItem('brightloop_jwt_token');
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Restore session from token
+  // Restore session from HTTP-only cookie or cached credential
   const restoreSession = async () => {
-    const token = localStorage.getItem('brightloop_jwt_token');
-    if (!token) {
-      setIsAuthenticated(false);
-      setIsLoading(false);
-      return;
-    }
-
     try {
       const meData = await api.getMe();
       setCurrentUser({
@@ -50,7 +41,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       setIsAuthenticated(true);
     } catch {
-      // Token expired or invalid
+      // Session absent or expired
       localStorage.removeItem('brightloop_jwt_token');
       setIsAuthenticated(false);
       setCurrentUser(null);
@@ -97,7 +88,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Ignore network errors
+    }
     localStorage.removeItem('brightloop_jwt_token');
     setCurrentUser(null);
     setIsAuthenticated(false);

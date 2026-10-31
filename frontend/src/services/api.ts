@@ -2,6 +2,29 @@ const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000') + '/a
 
 export type MoneyValue = number | string;
 
+export interface StaffUserItem {
+  id: string;
+  email: string;
+  full_name: string;
+  role: 'admin' | 'staff';
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface CreateStaffPayload {
+  email: string;
+  password: string;
+  full_name: string;
+  role: 'admin' | 'staff';
+  is_active?: boolean;
+}
+
+export interface UpdateStaffPayload {
+  full_name?: string;
+  role?: 'admin' | 'staff';
+  is_active?: boolean;
+}
+
 export interface AuthProfile {
   user: { id: string; email: string; full_name: string; role: string };
   customer_account?: { company_name: string } | null;
@@ -108,6 +131,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
+    credentials: 'include',
     headers,
   });
 
@@ -142,6 +166,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
+  logout: async () => {
+    try {
+      await request<{ message: string }>('/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignore network errors
+    }
+    localStorage.removeItem('brightloop_jwt_token');
+  },
   resetPassword: (token: string, new_password: string) =>
     request<{ message: string }>('/auth/reset-password', {
       method: 'POST',
@@ -183,5 +215,18 @@ export const api = {
   getPortalSubscriptions: () => request<SubscriptionApiItem[]>('/portal/subscriptions'),
   getPortalInvoices: () => request<InvoiceApiItem[]>('/portal/invoices'),
   getPortalProfile: () => request<PortalProfile>('/portal/profile'),
+
+  // Staff & Access Administration (Admin only)
+  getStaff: () => request<StaffUserItem[]>('/admin/staff'),
+  createStaff: (payload: CreateStaffPayload) =>
+    request<StaffUserItem>('/admin/staff', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateStaff: (id: string, payload: UpdateStaffPayload) =>
+    request<StaffUserItem>(`/admin/staff/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
 };
 

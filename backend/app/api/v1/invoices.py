@@ -11,6 +11,7 @@ from app.models.invoice import Invoice, InvoiceLine, InvoiceStatus
 from app.models.customer import CustomerAccount
 from app.schemas.invoice import InvoiceResponse, InvoiceLineResponse
 from app.api.v1.deps import require_staff_or_admin
+from app.services.audit import record_audit_event
 
 router = APIRouter()
 
@@ -93,6 +94,14 @@ async def confirm_invoice(
         raise HTTPException(status_code=400, detail="Only draft invoices can be confirmed.")
 
     inv.status = InvoiceStatus.CONFIRMED
+    await record_audit_event(
+        db,
+        entity_type="invoice",
+        entity_id=inv.id,
+        action="CONFIRM",
+        actor_user_id=_user.id,
+        changes={"invoice_number": inv.invoice_number, "status": inv.status.value},
+    )
     await db.commit()
     return {"message": f"Invoice {inv.invoice_number} confirmed.", "status": inv.status}
 

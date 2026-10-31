@@ -4,7 +4,7 @@ import smtplib
 from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,6 +12,13 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import verify_password, get_password_hash, create_access_token
+from app.core.rate_limit import (
+    rate_limit_login,
+    rate_limit_forgot_password,
+    rate_limit_reset_password,
+)
+from app.services.audit import record_audit_event
+from app.services.outbox import create_outbox_message
 from app.models.user import User, UserRole, PasswordResetToken
 from app.models.customer import CustomerAccount, CustomerAccountMembership, CustomerMembershipRole
 from app.schemas.auth import (
@@ -29,16 +36,44 @@ from app.api.v1.deps import get_current_active_user
 router = APIRouter()
 
 
+def set_session_cookie(response: Response, token: str) -> None:
+    """Sets secure HTTP-only session cookie for web clients."""
+    response.set_cookie(
+        key=settings.SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=settings.SESSION_COOKIE_SECURE,
+        samesite=settings.SESSION_COOKIE_SAMESITE,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+
+
+def delete_session_cookie(response: Response) -> None:
+    """Clears HTTP-only session cookie."""
+    response.delete_cookie(
+        key=settings.SESSION_COOKIE_NAME,
+        httponly=True,
+        samesite=settings.SESSION_COOKIE_SAMESITE,
+        path="/",
+    )
+
+
 @router.post("/signup", response_model=Token, status_code=status.HTTP_201_CREATED, tags=["Auth"])
-async def register_customer(payload: SignupRequest, db: AsyncSession = Depends(get_db)):
+async def register_customer(
+    payload: SignupRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Public customer registration.
     - Strictly forces role = 'customer' (never allows self-assigning staff/admin).
     - Creates customer user account and company record with owner membership.
+    - Emits audit log record and establishes HTTP-only session cookie.
     """
     normalized_email = payload.email.lower().strip()
 
-    # Check for existing email
+    # Check for existing email (case-insensitive normalized)
     existing_user_query = select(User).where(User.email == normalized_email)
     existing_user = (await db.execute(existing_user_query)).scalar_one_or_none()
     if existing_user:
@@ -81,20 +116,37 @@ async def register_customer(payload: SignupRequest, db: AsyncSession = Depends(g
         membership_role=CustomerMembershipRole.OWNER,
     )
     db.add(membership)
+
+    # 4. Record Audit Event
+    await record_audit_event(
+        db,
+        entity_type="user",
+        entity_id=new_user.id,
+        action="SIGNUP",
+        actor_user_id=new_user.id,
+        changes={"email": new_user.email, "role": new_user.role.value, "company_name": payload.company_name},
+    )
+
     await db.commit()
 
-    # Generate token
+    # Generate token and set HTTP-only cookie
     token = create_access_token(
         data={"sub": str(new_user.id), "email": new_user.email, "role": new_user.role.value}
     )
+    set_session_cookie(response, token)
     return Token(access_token=token, token_type="bearer")
 
 
-@router.post("/login", response_model=Token, tags=["Auth"])
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/login", response_model=Token, dependencies=[Depends(rate_limit_login)], tags=["Auth"])
+async def login(
+    payload: LoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Authenticate user with email and password.
-    Returns signed JWT access token.
+    Returns signed JWT access token and sets secure HTTP-only session cookie.
+    Enforces sliding-window rate limiting.
     """
     normalized_email = payload.email.lower().strip()
     query = select(User).where(User.email == normalized_email)
@@ -116,7 +168,27 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     token = create_access_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role.value}
     )
+    set_session_cookie(response, token)
+
+    await record_audit_event(
+        db,
+        entity_type="user",
+        entity_id=user.id,
+        action="LOGIN",
+        actor_user_id=user.id,
+    )
+    await db.commit()
+
     return Token(access_token=token, token_type="bearer")
+
+
+@router.post("/logout", tags=["Auth"])
+async def logout(response: Response):
+    """
+    Sign out user by invalidating and clearing HTTP-only session cookie.
+    """
+    delete_session_cookie(response)
+    return {"message": "Session terminated successfully."}
 
 
 @router.get("/me", response_model=AuthMeResponse, tags=["Auth"])
@@ -141,11 +213,16 @@ async def get_current_profile(
     )
 
 
-@router.post("/forgot-password", tags=["Auth"])
-async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/forgot-password", dependencies=[Depends(rate_limit_forgot_password)], tags=["Auth"])
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Initiate single-use password reset link.
-    Stores token hashed with SHA-256 and delivers reset link via SMTP.
+    Stores token hashed with SHA-256 and persists reset email in outbox.
+    Uses configurable settings.FRONTEND_URL for the reset link.
+    Enforces sliding-window rate limiting.
     """
     normalized_email = payload.email.lower().strip()
     query = select(User).where(User.email == normalized_email)
@@ -164,16 +241,10 @@ async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Dep
             is_used=False,
         )
         db.add(reset_token)
-        await db.commit()
 
-        # Send password reset email via configured SMTP (Mailpit in dev)
-        msg = EmailMessage()
-        msg["Subject"] = "Password Reset Request — Brightloop Software"
-        msg["From"] = settings.SMTP_FROM
-        msg["To"] = user.email
-
-        reset_link = f"http://localhost:5173/reset-password?token={raw_token}"
-        msg.set_content(
+        frontend_base = settings.FRONTEND_URL.rstrip('/')
+        reset_link = f"{frontend_base}/reset-password?token={raw_token}"
+        email_body = (
             f"Hello {user.full_name},\n\n"
             f"A password reset request was initiated for your Brightloop account.\n\n"
             f"Use the following secure link within 1 hour to reset your password:\n"
@@ -181,6 +252,37 @@ async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Dep
             f"If you did not request this, please disregard this email.\n\n"
             f"Brightloop Security Team"
         )
+
+        # Durable outbox message
+        await create_outbox_message(
+            db,
+            topic="email",
+            payload={
+                "type": "password_reset",
+                "to": user.email,
+                "subject": "Password Reset Request — Brightloop Software",
+                "body": email_body,
+                "reset_link": reset_link,
+                "expires_at": expires_at.isoformat(),
+            },
+        )
+
+        await record_audit_event(
+            db,
+            entity_type="user",
+            entity_id=user.id,
+            action="FORGOT_PASSWORD_REQUESTED",
+            actor_user_id=user.id,
+        )
+
+        await db.commit()
+
+        # Send password reset email via configured SMTP (Mailpit in dev)
+        msg = EmailMessage()
+        msg["Subject"] = "Password Reset Request — Brightloop Software"
+        msg["From"] = settings.SMTP_FROM
+        msg["To"] = user.email
+        msg.set_content(email_body)
 
         try:
             with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=5) as server:
@@ -194,11 +296,15 @@ async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Dep
     }
 
 
-@router.post("/reset-password", tags=["Auth"])
-async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+@router.post("/reset-password", dependencies=[Depends(rate_limit_reset_password)], tags=["Auth"])
+async def reset_password(
+    payload: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Complete password reset with single-use expirable token.
     Validates token against stored SHA-256 hash and enforces password complexity policy.
+    Enforces sliding-window rate limiting.
     """
     hashed_token = hashlib.sha256(payload.token.encode("utf-8")).hexdigest()
 
@@ -215,7 +321,10 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
         )
 
     # Check expiration
-    if datetime.now(timezone.utc) > token_record.expires_at:
+    expires_at = token_record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password reset token has expired. Please request a new one.",
@@ -232,6 +341,15 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
     # Update password and invalidate token
     user.hashed_password = get_password_hash(payload.new_password)
     token_record.is_used = True
+
+    await record_audit_event(
+        db,
+        entity_type="user",
+        entity_id=user.id,
+        action="PASSWORD_RESET",
+        actor_user_id=user.id,
+    )
+
     await db.commit()
 
     return {"message": "Password successfully reset. You may now sign in with your new credentials."}

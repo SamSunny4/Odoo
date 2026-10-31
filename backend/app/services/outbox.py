@@ -1,0 +1,31 @@
+import uuid
+from typing import Any, Dict, Optional
+from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.outbox import OutboxMessage, OutboxMessageStatus
+from app.models.base import utc_now
+
+
+async def create_outbox_message(
+    db: AsyncSession,
+    *,
+    topic: str,
+    payload: Dict[str, Any],
+    scheduled_at: Optional[datetime] = None,
+    max_retries: int = 3,
+) -> OutboxMessage:
+    """
+    Persist an outbound message in the transactional outbox.
+    Ensures message durability within the same database transaction as business mutations.
+    """
+    message = OutboxMessage(
+        topic=topic,
+        payload=payload,
+        status=OutboxMessageStatus.PENDING.value,
+        retry_count=0,
+        max_retries=max_retries,
+        scheduled_at=scheduled_at or utc_now(),
+    )
+    db.add(message)
+    return message
+

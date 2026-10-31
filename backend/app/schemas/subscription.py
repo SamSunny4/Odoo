@@ -2,11 +2,13 @@ import uuid
 from datetime import date
 from decimal import Decimal
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from app.models.subscription import SubscriptionStatus
 
 
 class SubscriptionLineResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     product_id: uuid.UUID
     product_name: Optional[str] = None
@@ -14,11 +16,10 @@ class SubscriptionLineResponse(BaseModel):
     quantity: int
     unit_price: Decimal
 
-    class Config:
-        from_attributes = True
-
 
 class SubscriptionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     subscription_number: str
     customer_account_id: uuid.UUID
@@ -33,7 +34,3 @@ class SubscriptionResponse(BaseModel):
     payment_terms_days: int
     total_amount: Decimal = Decimal("0.00")
     lines: List[SubscriptionLineResponse] = []
-
-    class Config:
-        from_attributes = True
-

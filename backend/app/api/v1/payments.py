@@ -11,6 +11,7 @@ from app.models.payment import Payment, PaymentMethod
 from app.schemas.invoice import RecordPaymentRequest, PaymentResponse
 from app.api.v1.deps import require_staff_or_admin, get_current_user
 from app.models.user import User
+from app.services.audit import record_audit_event
 
 router = APIRouter()
 
@@ -55,6 +56,21 @@ async def record_payment(
         recorded_by_user_id=current_user.id,
     )
     db.add(new_payment)
+    await db.flush()
+
+    # Record Audit Event
+    await record_audit_event(
+        db,
+        entity_type="payment",
+        entity_id=new_payment.id,
+        action="CREATE_PAYMENT",
+        actor_user_id=current_user.id,
+        changes={
+            "invoice_id": str(invoice.id),
+            "amount": str(payload.amount),
+            "payment_method": str(payload.payment_method),
+        },
+    )
 
     # 2. Update invoice paid_amount
     invoice.paid_amount = Decimal(str(invoice.paid_amount)) + payload.amount

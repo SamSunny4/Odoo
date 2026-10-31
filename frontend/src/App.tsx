@@ -9,6 +9,7 @@ import { Subscriptions } from './pages/Subscriptions';
 import { Invoices } from './pages/Invoices';
 import { CustomerPortal } from './pages/CustomerPortal';
 import { Login } from './pages/Login';
+import { StaffAdmin } from './pages/StaffAdmin';
 
 export const AppContent: React.FC = () => {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -54,9 +55,10 @@ export const AppContent: React.FC = () => {
         return <Subscriptions />;
       case 'invoices':
         return <Invoices />;
+      case 'team':
+        return <StaffAdmin />;
       case 'plans':
       case 'discounts':
-      case 'team':
         return (
           <div className="bg-white rounded-xl border border-slate-200 p-8 text-center space-y-3">
             <h2 className="text-xl font-bold text-slate-800 capitalize">{currentTab} Administration</h2>

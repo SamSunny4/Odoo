@@ -1,22 +1,23 @@
 import uuid
 from decimal import Decimal
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from app.models.catalog import ProductType
 from app.models.plan import BillingCadence
 
 
 class ProductVariantResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     name: str
     price_adjustment: Decimal
     is_active: bool
 
-    class Config:
-        from_attributes = True
-
 
 class ProductResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     name: str
     type: ProductType
@@ -26,11 +27,10 @@ class ProductResponse(BaseModel):
     is_active: bool
     variants: List[ProductVariantResponse] = []
 
-    class Config:
-        from_attributes = True
-
 
 class PlanResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     name: str
     cadence: BillingCadence
@@ -41,7 +41,3 @@ class PlanResponse(BaseModel):
     allow_pause: bool
     allow_renewal: bool
     is_active: bool
-
-    class Config:
-        from_attributes = True
-

@@ -1,6 +1,6 @@
 import uuid
 from typing import Annotated, List, Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=F
 
 
 async def get_current_user(
+    request: Request,
     token: Annotated[Optional[str], Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
@@ -25,11 +26,12 @@ async def get_current_user(
         detail="Could not validate credentials or token expired.",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    if not token:
+    auth_token = request.cookies.get(settings.SESSION_COOKIE_NAME) or token
+    if not auth_token:
         raise credentials_exception
 
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(auth_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         user_id_str: str = payload.get("sub")
         if not user_id_str:
             raise credentials_exception

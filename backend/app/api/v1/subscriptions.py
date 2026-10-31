@@ -494,18 +494,19 @@ async def get_subscription(
             )
         )
 
-    return SubscriptionDetailResponse(
-        **base_response.model_dump(),
-        customer_billing_email=sub.customer_account.billing_email if sub.customer_account else None,
-        customer_address=sub.customer_account.billing_address_line1 if sub.customer_account else None,
-        plan_cadence=sub.plan.cadence.value if sub.plan else None,
-        plan_base_price=Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00"),
-        plan_allow_pause=sub.plan.allow_pause if sub.plan else True,
-        plan_allow_early_close=sub.plan.allow_early_close if sub.plan else True,
-        plan_allow_renewal=sub.plan.allow_renewal if sub.plan else True,
-        plan_auto_close_on_expiry=sub.plan.auto_close_on_expiry if sub.plan else False,
-        audit_history=audit_items,
-    )
+    detail_data = base_response.model_dump()
+    detail_data.update({
+        "customer_billing_email": sub.customer_account.billing_email if sub.customer_account else None,
+        "customer_address": sub.customer_account.billing_address_line1 if sub.customer_account else None,
+        "plan_cadence": sub.plan.cadence.value if sub.plan else None,
+        "plan_base_price": Decimal(str(sub.plan.base_price)) if sub.plan else Decimal("0.00"),
+        "plan_allow_pause": sub.plan.allow_pause if sub.plan else True,
+        "plan_allow_early_close": sub.plan.allow_early_close if sub.plan else True,
+        "plan_allow_renewal": sub.plan.allow_renewal if sub.plan else True,
+        "plan_auto_close_on_expiry": sub.plan.auto_close_on_expiry if sub.plan else False,
+        "audit_history": audit_items,
+    })
+    return SubscriptionDetailResponse(**detail_data)
 
 
 @router.put(

@@ -207,7 +207,7 @@ async def get_collection_queue(
     last_reminder_map = {}
     if inv_ids:
         audit_query = (
-            select(AuditEvent.entity_id, func.max(AuditEvent.created_at))
+            select(AuditEvent.entity_id, func.max(AuditEvent.timestamp))
             .where(
                 AuditEvent.entity_type == "invoice",
                 AuditEvent.entity_id.in_(inv_ids),

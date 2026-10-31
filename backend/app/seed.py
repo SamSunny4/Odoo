@@ -372,7 +372,7 @@ async def seed_data():
                 )
                 session.add(pl_obj)
                 await session.flush()
-                print(f"  + Plan: {pl['name']} (₹{pl['base_price']})")
+                print(f"  + Plan: {pl['name']} (INR {pl['base_price']})")
             else:
                 pl_obj.base_price = pl["base_price"]
 
@@ -618,7 +618,7 @@ async def seed_data():
                     )
                     session.add(sl)
                 await session.flush()
-                print(f"  + Subscription: {sm['num']} ({sm['status'].value} • {sm['company']})")
+                print(f"  + Subscription: {sm['num']} ({sm['status'].value} | {sm['company']})")
             else:
                 s_obj.status = sm["status"]
                 s_obj.next_billing_date = sm["next_bill"]
@@ -803,7 +803,7 @@ async def seed_data():
                 )
                 session.add(inv_obj)
                 await session.flush()
-                print(f"  + Invoice: {im['num']} ({im['status'].value} • ₹{im['total']} • {im['company']})")
+                print(f"  + Invoice: {im['num']} ({im['status'].value} | INR {im['total']} | {im['company']})")
             else:
                 inv_obj.currency = "INR"
                 inv_obj.total_amount = im["total"]
@@ -890,7 +890,7 @@ async def seed_data():
                 )
                 session.add(p_obj)
                 await session.flush()
-                print(f"  + Payment: ₹{pm['amount']} on {pm['inv']} ({pm['method'].value})")
+                print(f"  + Payment: INR {pm['amount']} on {pm['inv']} ({pm['method'].value})")
 
                 for rev in pm["reversals"]:
                     rev_date = datetime.now(timezone.utc) - timedelta(days=abs(rev["days_offset"]))
@@ -903,7 +903,7 @@ async def seed_data():
                     )
                     session.add(reversal_obj)
                     await session.flush()
-                    print(f"    * Payment Reversal/Refund: ₹{rev['amount']} (Reason: {rev['reason']})")
+                    print(f"    * Payment Reversal/Refund: INR {rev['amount']} (Reason: {rev['reason']})")
 
         await session.commit()
         print("==========================================================")

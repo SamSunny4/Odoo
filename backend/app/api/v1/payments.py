@@ -684,6 +684,7 @@ async def reverse_payment(
         select(Payment)
         .where(Payment.id == payment.id)
         .options(*_payment_options())
+        .execution_options(populate_existing=True)
     )
     refreshed = (await db.execute(query)).scalar_one()
     return _build_payment_detail(refreshed)

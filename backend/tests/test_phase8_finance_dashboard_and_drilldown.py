@@ -106,6 +106,7 @@ async def test_drill_down_invoiced_revenue(client: AsyncClient, seed_users):
 @pytest.mark.asyncio
 async def test_drill_down_cash_collected_vs_invoiced(client: AsyncClient, seed_users):
     admin = seed_users["admin"]
+    customer_user = seed_users["customer_a"]
     customer_account = seed_users["account_a"]
     plan = seed_users["plan"]
     product = seed_users["product"]
@@ -179,6 +180,14 @@ async def test_drill_down_cash_collected_vs_invoiced(client: AsyncClient, seed_u
     assert Decimal(str(outstanding_res.json()["total_amount"])) == Decimal(
         str(summary_res.json()["outstanding_balance"])
     )
+
+    client.cookies.clear()
+    client.cookies.update(auth_cookies(customer_user))
+    portal_payments = await client.get("/api/v1/portal/payments")
+    assert portal_payments.status_code == 200
+    portal_payment = next(item for item in portal_payments.json()["items"] if item["id"] == pay_id)
+    assert Decimal(str(portal_payment["refunded_amount"])) == Decimal("25.00")
+    assert Decimal(str(portal_payment["net_amount"])) == Decimal("50.00")
 
 
 @pytest.mark.asyncio

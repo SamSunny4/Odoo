@@ -321,6 +321,7 @@ async def list_customer_payments(
         select(Payment, Invoice)
         .join(Invoice, Payment.invoice_id == Invoice.id)
         .where(Invoice.customer_account_id == membership.customer_account_id)
+        .options(selectinload(Payment.reversals))
         .order_by(Payment.payment_date.desc(), Payment.created_at.desc())
     )
     count = await db.scalar(
@@ -341,6 +342,14 @@ async def list_customer_payments(
                 payment_date=payment.payment_date,
                 reference_note=payment.reference_note,
                 is_reversed=payment.is_reversed,
+                refunded_amount=sum(
+                    (Decimal(str(reversal.reversal_amount)) for reversal in payment.reversals),
+                    Decimal("0.00"),
+                ),
+                net_amount=Decimal(str(payment.amount)) - sum(
+                    (Decimal(str(reversal.reversal_amount)) for reversal in payment.reversals),
+                    Decimal("0.00"),
+                ),
             )
             for payment, invoice in rows
         ],

@@ -652,10 +652,15 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                         </td>
                         <td className="px-4 py-3 text-right font-mono font-semibold text-slate-900">
                           {payment.currency} {Number(payment.amount).toFixed(2)}
+                          {Number(payment.refunded_amount) > 0 && (
+                            <div className="text-xs font-normal text-amber-700">
+                              Refunded {payment.currency} {Number(payment.refunded_amount).toFixed(2)} · Net {payment.currency} {Number(payment.net_amount).toFixed(2)}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${payment.is_reversed ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                            {payment.is_reversed ? 'Reversed' : 'Received'}
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${payment.is_reversed || Number(payment.refunded_amount) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                            {payment.is_reversed ? 'Reversed' : Number(payment.refunded_amount) > 0 ? 'Partially refunded' : 'Received'}
                           </span>
                         </td>
                       </tr>

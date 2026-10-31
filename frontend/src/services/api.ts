@@ -413,6 +413,8 @@ export interface PortalPaymentItem {
   payment_date: string;
   reference_note?: string | null;
   is_reversed: boolean;
+  refunded_amount: MoneyValue;
+  net_amount: MoneyValue;
 }
 
 export interface PortalAddonProduct {
@@ -736,6 +738,18 @@ async function requestBlob(endpoint: string): Promise<Blob> {
   }
   return response.blob();
 }
+
+export function saveBlobAsFile(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 
 async function requestPaginated<T>(endpoint: string, params?: QueryParams): Promise<PaginatedResult<T>> {
   const qs = buildQuery(params);
@@ -1073,6 +1087,33 @@ export const api = {
     if (params.page_size) q.append('page_size', String(params.page_size));
     return request<DrillDownReport>(`/reports/drill-down?${q.toString()}`);
   },
+  downloadReportCsv: async (params: {
+    metric: string;
+    period?: string;
+    start_date?: string;
+    end_date?: string;
+    plan_id?: string;
+    customer_account_id?: string;
+    status?: string;
+    search?: string;
+  }) => {
+    const q = new URLSearchParams();
+    q.append('metric', params.metric);
+    if (params.period) q.append('period', params.period);
+    if (params.start_date) q.append('start_date', params.start_date);
+    if (params.end_date) q.append('end_date', params.end_date);
+    if (params.plan_id) q.append('plan_id', params.plan_id);
+    if (params.customer_account_id) q.append('customer_account_id', params.customer_account_id);
+    if (params.status) q.append('status', params.status);
+    if (params.search) q.append('search', params.search);
+    const blob = await requestBlob(`/reports/export?${q.toString()}`);
+    const today = new Date().toISOString().split('T')[0];
+    saveBlobAsFile(blob, `brightloop_finance_${params.metric}_${today}.csv`);
+  },
+  downloadControlTowerRunCsv: async (runId: string) => {
+    const blob = await requestBlob(`/control-tower/runs/${runId}/export`);
+    saveBlobAsFile(blob, `billing_run_${runId}.csv`);
+  },
   getReportExportUrl: (params: {
     metric: string;
     period?: string;
@@ -1092,9 +1133,9 @@ export const api = {
     if (params.customer_account_id) q.append('customer_account_id', params.customer_account_id);
     if (params.status) q.append('status', params.status);
     if (params.search) q.append('search', params.search);
-    return `/api/v1/reports/export?${q.toString()}`;
+    return `${API_BASE}/reports/export?${q.toString()}`;
   },
-  getControlTowerRunExportUrl: (runId: string) => `/api/v1/control-tower/runs/${runId}/export`,
+  getControlTowerRunExportUrl: (runId: string) => `${API_BASE}/control-tower/runs/${runId}/export`,
 
 
   // Customer Portal (Derives account from session)

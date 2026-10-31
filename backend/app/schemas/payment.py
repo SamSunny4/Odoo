@@ -8,7 +8,13 @@ from app.models.payment import PaymentMethod
 
 class PaymentReversalRequest(BaseModel):
     reason: str = Field(..., min_length=3, max_length=500, description="Mandatory audit reason for voiding or refunding payment")
-    amount: Optional[Decimal] = Field(None, gt=0, description="Optional partial refund amount. If omitted, full payment amount is reversed.")
+    amount: Optional[Decimal] = Field(
+        None,
+        gt=0,
+        max_digits=12,
+        decimal_places=2,
+        description="Optional partial refund amount. If omitted, the remaining refundable amount is reversed.",
+    )
 
 
 class PaymentReversalResponse(BaseModel):
@@ -46,7 +52,13 @@ class PaymentDetailResponse(PaymentResponse):
 
 class RecordPaymentRequest(BaseModel):
     invoice_id: uuid.UUID
-    amount: Decimal = Field(..., gt=0, description="Payment amount must be greater than zero")
+    amount: Decimal = Field(
+        ...,
+        gt=0,
+        max_digits=12,
+        decimal_places=2,
+        description="Payment amount must be greater than zero and use at most two decimal places",
+    )
     payment_method: PaymentMethod = PaymentMethod.BANK_TRANSFER
     payment_date: date
     reference_note: Optional[str] = None

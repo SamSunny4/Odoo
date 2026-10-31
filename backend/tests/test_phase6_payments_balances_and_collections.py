@@ -174,6 +174,18 @@ async def test_payment_validation_and_overpayment_prevention(client: AsyncClient
     )
     assert neg_pay_res.status_code in (400, 422)
 
+    precision_res = await client.post(
+        "/api/v1/payments",
+        json={
+            "invoice_id": inv_id,
+            "amount": 10.001,
+            "payment_method": "cash",
+            "payment_date": date.today().isoformat(),
+        },
+        cookies=admin_cookies,
+    )
+    assert precision_res.status_code == 422
+
     # C. Attempt overpayment (exceeding balance) -> should fail with 400
     excess_amount = float(total + Decimal("500.00"))
     overpay_res = await client.post(

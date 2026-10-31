@@ -44,6 +44,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [showDefinitions, setShowDefinitions] = useState<boolean>(false);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   // Drill-Down Ledger State
   const [activeMetric, setActiveMetric] = useState<string>('invoiced');
@@ -133,19 +134,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const handleCardClick = (metricKey: string) => {
     if (!isAdmin) return;
     setActiveMetric(metricKey);
+    setDrillStatus('');
     setDrillPage(1);
   };
 
-  const handleExportCsv = () => {
-    const exportUrl = api.getReportExportUrl({
-      metric: activeMetric,
-      period,
-      plan_id: drillPlanId || undefined,
-      customer_account_id: drillCustomerId || undefined,
-      status: drillStatus || undefined,
-      search: drillSearch || undefined,
-    });
-    window.open(exportUrl, '_blank');
+  const handleExportCsv = async () => {
+    try {
+      setIsExporting(true);
+      await api.downloadReportCsv({
+        metric: activeMetric,
+        period,
+        plan_id: drillPlanId || undefined,
+        customer_account_id: drillCustomerId || undefined,
+        status: drillStatus || undefined,
+        search: drillSearch || undefined,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to export CSV report';
+      setError(msg);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const metricCard = (
@@ -211,10 +220,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               <button
                 onClick={handleExportCsv}
                 className="px-3 py-2 border border-slate-200 rounded-lg text-slate-700 bg-white hover:bg-slate-50 text-xs sm:text-sm font-semibold flex items-center gap-1.5 shadow-2xs transition"
+                disabled={isExporting}
                 title="Export current financial dataset to CSV"
               >
                 <Download className="w-4 h-4 text-slate-500" />
-                Export CSV
+                {isExporting ? 'Exporting...' : 'Export CSV'}
               </button>
             )}
             <button
@@ -298,7 +308,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             </div>
             <div className="p-2.5 bg-white rounded-lg border border-indigo-100">
               <strong className="text-slate-900">Monthly Recurring Revenue (MRR):</strong> Normalized monthly run
-              rate of active subscription contracts, calculated before tax and discounts.
+              rate of active subscription contracts, after recurring discounts and before tax.
             </div>
             <div className="p-2.5 bg-white rounded-lg border border-indigo-100">
               <strong className="text-slate-900">Outstanding Balance:</strong> Cumulative uncollected balance across all
@@ -428,7 +438,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 className="px-3 py-1.5 border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 text-xs font-semibold rounded-lg flex items-center gap-1 shadow-2xs transition"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
-                Export Ledger CSV
+                {isExporting ? 'Exporting...' : 'Export Ledger CSV'}
               </button>
             </div>
           </div>
@@ -442,6 +452,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 value={activeMetric}
                 onChange={(e) => {
                   setActiveMetric(e.target.value);
+                  setDrillStatus('');
                   setDrillPage(1);
                 }}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"

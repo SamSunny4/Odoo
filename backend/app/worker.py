@@ -9,7 +9,7 @@ from celery import Celery
 from celery.schedules import crontab
 from sqlalchemy import case, create_engine, func, select, delete, update, or_
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
@@ -605,7 +605,7 @@ def queue_billing_reminders():
                 Invoice.status == InvoiceStatus.CONFIRMED,
                 Invoice.due_date < today,
                 Invoice.paid_amount < Invoice.total_amount,
-            )
+            ).options(selectinload(Invoice.customer_account))
         ).scalars().all()
         for invoice in overdue_invoices:
             days_overdue = (today - invoice.due_date).days
@@ -613,6 +613,8 @@ def queue_billing_reminders():
                 continue
             reminder_window = overdue_reminder_window(days_overdue)
             recipient = (invoice.customer_snapshot or {}).get("billing_email")
+            if not recipient and invoice.customer_account:
+                recipient = invoice.customer_account.billing_email
             if not recipient:
                 continue
             dedupe_key = f"overdue-reminder:{invoice.id}:{reminder_window}"

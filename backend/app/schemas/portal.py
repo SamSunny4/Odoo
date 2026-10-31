@@ -39,6 +39,8 @@ class PortalPaymentResponse(BaseModel):
     payment_date: date
     reference_note: Optional[str] = None
     is_reversed: bool
+    refunded_amount: Decimal = Decimal("0.00")
+    net_amount: Decimal
 
 
 PortalPaymentPage = PaginatedResponse[PortalPaymentResponse]

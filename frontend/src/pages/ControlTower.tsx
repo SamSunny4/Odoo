@@ -68,7 +68,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
   const [totalProjected, setTotalProjected] = useState(0);
   const [flaggedCount, setFlaggedCount] = useState(0);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [batchSize, setBatchSize] = useState<number>(100);
+  const [batchSize, setBatchSize] = useState<number>(50);
   const [committed, setCommitted] = useState(false);
   const [commitMessage, setCommitMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -406,7 +406,10 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                   disabled={committed || !isAdmin || cleanItems.length === 0}
                   className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold disabled:opacity-50"
                 >
-                  {selectedIds.length === cleanItems.length ? 'Deselect All' : `Select First 50 Clean (${Math.min(cleanItems.length, 50)})`}
+                  {cleanItems.length > 0 && selectedIds.length === Math.min(cleanItems.length, 50) &&
+                  cleanItems.slice(0, 50).every((item) => selectedIds.includes(item.id))
+                    ? 'Deselect First 50'
+                    : `Select First 50 Clean (${Math.min(cleanItems.length, 50)})`}
                 </button>
                 <span className="text-xs text-slate-500">Interactive commits are limited to 50 invoices.</span>
               </div>
@@ -426,23 +429,26 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                 >
                   <option value={25}>25 subscriptions</option>
                   <option value={50}>50 subscriptions</option>
-                  <option value={100}>100 subscriptions</option>
-                  <option value={250}>250 subscriptions</option>
                 </select>
                 <span className="text-xs text-slate-400 ml-2">
                   Preview Run: {runId ? runId.slice(0, 8) : '—'}
                 </span>
                 {runId && (
-                  <a
-                    href={api.getControlTowerRunExportUrl(runId)}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    onClick={async () => {
+                      try {
+                        await api.downloadControlTowerRunCsv(runId);
+                      } catch (err: unknown) {
+                        const msg = err instanceof Error ? err.message : 'Failed to export run CSV';
+                        setError(msg);
+                      }
+                    }}
                     className="px-2.5 py-1 border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 text-xs font-semibold rounded-md shadow-2xs flex items-center gap-1 transition ml-2"
                     title="Export preview batch to CSV"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-500" />
                     Export CSV
-                  </a>
+                  </button>
                 )}
               </div>
             </div>

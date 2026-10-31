@@ -24,7 +24,7 @@ class DashboardSummaryResponse(BaseModel):
     pending_quotes_count: int
     renewals_due_7d_count: int
     metric_definitions: Dict[str, str] = {
-        "monthly_recurring_revenue": "Normalized monthly run rate of all active contracts (annualized/monthly normalized before tax and discounts).",
+        "monthly_recurring_revenue": "Normalized monthly run rate of active contracts after recurring discounts and before tax.",
         "invoiced_revenue": "Total value of all legal financial demand invoices issued and confirmed within the selected date range.",
         "cash_collected": "Total actual cash remittances received against invoices within the selected date range, net of reversals/refunds.",
         "outstanding_balance": "Total unpaid balance remaining across all confirmed and open customer invoices as of today.",

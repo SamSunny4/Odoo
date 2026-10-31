@@ -10,21 +10,22 @@ from app.core.config import settings
 from app.core.security import verify_password
 from app.models.user import User, PasswordResetToken
 from app.models.outbox import OutboxMessage, OutboxMessageStatus
-from app.worker import process_outbox_messages
+from app.worker import process_outbox_messages_async
 
 
 @pytest.mark.asyncio
 async def test_forgot_password_generates_token_and_outbox(client, db_session, seed_users):
     """
-    Forgot password creates an SHA-256 hashed single-use token and writes a complete
-    outbox message with email body and recipient for reliable background delivery.
+    Forgot password creates an SHA-256 hashed single-use token and writes an outbox message.
+    CRITICAL SECURITY CHECK: Plaintext reset tokens or links are NEVER persisted in the database;
+    only the encrypted ciphertext is saved in outbox payload.
     """
     user = seed_users["customer_a"]
 
     res = await client.post("/api/v1/auth/forgot-password", json={"email": user.email})
     assert res.status_code == 200
 
-    # Verify reset token record in DB
+    # Verify reset token record in DB has SHA-256 hash (never raw token)
     tokens = (
         await db_session.execute(
             select(PasswordResetToken).where(PasswordResetToken.user_id == user.id)
@@ -49,19 +50,24 @@ async def test_forgot_password_generates_token_and_outbox(client, db_session, se
     assert msg.payload["type"] == "password_reset"
     assert msg.payload["to"] == user.email
     assert msg.payload["token_id"] == str(token_record.id)
-    assert "body" in msg.payload
-    assert "reset-password?token=" in msg.payload["body"]
+
+    # Database security verification: plaintext reset secrets must NEVER be persisted
+    assert "reset_link" not in msg.payload
+    assert "raw_token" not in msg.payload
+    assert "body" not in msg.payload
+    assert "encrypted_reset_token" in msg.payload
 
 
 @pytest.mark.asyncio
 async def test_forgot_password_outbox_worker_retry_on_smtp_failure(client, db_session, seed_users):
     """
     When direct SMTP dispatch fails during forgot-password request, the outbox message
-    is left PENDING with error details, allowing the outbox worker to retry and deliver it.
+    is left PENDING with error details. The background outbox worker then retries,
+    decrypts the token, constructs the email, and successfully delivers it.
     """
     user = seed_users["customer_a"]
 
-    # Simulate direct SMTP server failure during forgot-password endpoint call
+    # 1. Simulate direct SMTP server failure during forgot-password endpoint call
     with patch("smtplib.SMTP", side_effect=OSError("SMTP server connection refused")):
         res = await client.post("/api/v1/auth/forgot-password", json={"email": user.email})
         assert res.status_code == 200
@@ -76,13 +82,59 @@ async def test_forgot_password_outbox_worker_retry_on_smtp_failure(client, db_se
     assert msg.status == OutboxMessageStatus.PENDING.value
     assert "queued for background worker retry" in (msg.last_error or "")
 
-    # Now verify that worker process_outbox_messages successfully delivers the pending email
+    # 2. Trigger the outbox worker to retry delivery
     with patch("smtplib.SMTP") as mock_smtp:
         mock_server = mock_smtp.return_value.__enter__.return_value
-        # Trigger dispatcher
-        with patch("app.worker.sync_engine", db_session.bind):
-            # Worker tasks operate with a session on sync engine, verify dispatcher logic
-            pass
+        result = await process_outbox_messages_async(db_session)
+        assert result["processed"] == 1
+
+        # Verify email was actually dispatched via SMTP
+        assert mock_server.send_message.called
+        sent_email = mock_server.send_message.call_args[0][0]
+        assert sent_email["To"] == user.email
+        assert "reset-password?token=" in sent_email.get_content()
+
+    # 3. Verify outbox record transitioned to SENT
+    await db_session.refresh(msg)
+    assert msg.status == OutboxMessageStatus.SENT.value
+    assert msg.sent_at is not None
+    assert msg.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_outbox_worker_reclaims_stuck_processing_messages(client, db_session, seed_users):
+    """
+    Crash recovery: If an outbox worker crashes after claiming a message, the message
+    is left in PROCESSING. The next run reclaims stuck PROCESSING messages past timeout.
+    """
+    from app.core.crypto import encrypt_secret
+    user = seed_users["customer_a"]
+    raw_token = secrets.token_urlsafe(32)
+
+    stuck_msg = OutboxMessage(
+        topic="email",
+        status=OutboxMessageStatus.PROCESSING.value,
+        payload={
+            "type": "password_reset",
+            "to": user.email,
+            "subject": "Password Reset",
+            "encrypted_reset_token": encrypt_secret(raw_token),
+        },
+        retry_count=0,
+    )
+    # Simulate updated_at 15 minutes ago (crashed worker)
+    stuck_msg.updated_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+    db_session.add(stuck_msg)
+    await db_session.commit()
+
+    with patch("smtplib.SMTP") as mock_smtp:
+        result = await process_outbox_messages_async(db_session, stuck_timeout_minutes=5)
+        assert result["reclaimed"] >= 1
+        assert result["processed"] >= 1
+
+    await db_session.refresh(stuck_msg)
+    assert stuck_msg.status == OutboxMessageStatus.SENT.value
+    assert stuck_msg.sent_at is not None
 
 
 @pytest.mark.asyncio

@@ -7,12 +7,13 @@ from email.message import EmailMessage
 from celery import Celery
 from celery.schedules import crontab
 from sqlalchemy import create_engine, func, select, delete
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.clock import organization_today
+from app.core.crypto import decrypt_secret
 from app.models.billing_run import BillingRunItemStatus
 from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.subscription import Subscription, SubscriptionStatus
@@ -140,64 +141,178 @@ def check_overdue_invoices():
         return {"overdue_count": len(overdue)}
 
 
-@celery_app.task(name="tasks.process_outbox_messages")
-def process_outbox_messages(batch_size: int = 50):
+def _deliver_outbox_message(msg: OutboxMessage) -> None:
+    """Helper delivering a single OutboxMessage via appropriate adapter."""
+    if msg.topic == "email":
+        to_email = msg.payload.get("to")
+        subject = msg.payload.get("subject", "Notification from Brightloop")
+        body = msg.payload.get("body")
+
+        # Handle password reset with encrypted token
+        if msg.payload.get("type") == "password_reset" and "encrypted_reset_token" in msg.payload:
+            raw_token = decrypt_secret(msg.payload["encrypted_reset_token"])
+            frontend_base = settings.FRONTEND_URL.rstrip('/')
+            reset_link = f"{frontend_base}/reset-password?token={raw_token}"
+            subject = msg.payload.get("subject", "Password Reset Request — Brightloop Software")
+            body = (
+                f"Hello,\n\n"
+                f"A password reset request was initiated for your Brightloop account.\n\n"
+                f"Use the following secure link within 1 hour to reset your password:\n"
+                f"{reset_link}\n\n"
+                f"If you did not request this, please disregard this email.\n\n"
+                f"Brightloop Security Team"
+            )
+
+        if not to_email or not body:
+            raise ValueError(f"Outbox email message {msg.id} missing required 'to' or 'body' field.")
+
+        email_msg = EmailMessage()
+        email_msg["Subject"] = subject
+        email_msg["From"] = settings.SMTP_FROM
+        email_msg["To"] = to_email
+        email_msg.set_content(body)
+
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+            server.send_message(email_msg)
+
+
+async def process_outbox_messages_async(
+    session: AsyncSession,
+    batch_size: int = 50,
+    stuck_timeout_minutes: int = 5,
+) -> dict:
     """
-    Durable outbox dispatcher: pulls pending messages from outbox_messages,
-    delivers external notifications/emails via SMTP adapter, and updates status
-    to SENT or FAILED with retry tracking.
+    Async outbox dispatcher:
+    1. Reclaims messages stuck in PROCESSING due to worker crashes.
+    2. Pulls pending messages due for delivery.
+    3. Securely decrypts encrypted payload secrets (e.g. password reset tokens) and sends via SMTP.
+    4. Records delivery status and handles retries with exponential backoff.
     """
     now = datetime.now(timezone.utc)
-    with Session(sync_engine) as session:
-        messages = session.execute(
-            select(OutboxMessage)
-            .where(
-                OutboxMessage.status == OutboxMessageStatus.PENDING.value,
-                OutboxMessage.scheduled_at <= now,
-            )
-            .order_by(OutboxMessage.created_at.asc())
-            .limit(batch_size)
-        ).scalars().all()
 
-        processed_count = 0
-        for msg in messages:
-            msg.status = OutboxMessageStatus.PROCESSING.value
+    # Step 1: Crash recovery - reclaim messages stuck in PROCESSING
+    stuck_cutoff = now - timedelta(minutes=stuck_timeout_minutes)
+    stuck_result = await session.execute(
+        select(OutboxMessage).where(
+            OutboxMessage.status == OutboxMessageStatus.PROCESSING.value,
+            OutboxMessage.updated_at < stuck_cutoff,
+        )
+    )
+    stuck_messages = stuck_result.scalars().all()
+
+    for stuck in stuck_messages:
+        stuck.retry_count += 1
+        stuck.last_error = "Worker crashed or timed out while processing; reclaimed."
+        if stuck.retry_count >= stuck.max_retries:
+            stuck.status = OutboxMessageStatus.FAILED.value
+        else:
+            stuck.status = OutboxMessageStatus.PENDING.value
+            stuck.scheduled_at = now
+    if stuck_messages:
+        await session.commit()
+
+    # Step 2: Query pending messages
+    pending_result = await session.execute(
+        select(OutboxMessage)
+        .where(
+            OutboxMessage.status == OutboxMessageStatus.PENDING.value,
+            OutboxMessage.scheduled_at <= now,
+        )
+        .order_by(OutboxMessage.created_at.asc())
+        .limit(batch_size)
+    )
+    messages = pending_result.scalars().all()
+
+    processed_count = 0
+    for msg in messages:
+        msg.status = OutboxMessageStatus.PROCESSING.value
+        await session.commit()
+
+        try:
+            _deliver_outbox_message(msg)
+            msg.status = OutboxMessageStatus.SENT.value
+            msg.sent_at = datetime.now(timezone.utc)
+            msg.last_error = None
+            await session.commit()
+            processed_count += 1
+        except Exception as exc:
+            msg.retry_count += 1
+            msg.last_error = str(exc)
+            if msg.retry_count >= msg.max_retries:
+                msg.status = OutboxMessageStatus.FAILED.value
+            else:
+                msg.status = OutboxMessageStatus.PENDING.value
+                msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
+            await session.commit()
+
+    return {"processed": processed_count, "reclaimed": len(stuck_messages), "batch_size": len(messages)}
+
+
+def _process_outbox_sync(session: Session, batch_size: int = 50, stuck_timeout_minutes: int = 5) -> dict:
+    """Synchronous dispatcher implementation for Celery tasks."""
+    now = datetime.now(timezone.utc)
+
+    # Step 1: Crash recovery - reclaim messages stuck in PROCESSING
+    stuck_cutoff = now - timedelta(minutes=stuck_timeout_minutes)
+    stuck_messages = session.execute(
+        select(OutboxMessage).where(
+            OutboxMessage.status == OutboxMessageStatus.PROCESSING.value,
+            OutboxMessage.updated_at < stuck_cutoff,
+        )
+    ).scalars().all()
+
+    for stuck in stuck_messages:
+        stuck.retry_count += 1
+        stuck.last_error = "Worker crashed or timed out while processing; reclaimed."
+        if stuck.retry_count >= stuck.max_retries:
+            stuck.status = OutboxMessageStatus.FAILED.value
+        else:
+            stuck.status = OutboxMessageStatus.PENDING.value
+            stuck.scheduled_at = now
+    if stuck_messages:
+        session.commit()
+
+    # Step 2: Query pending messages
+    messages = session.execute(
+        select(OutboxMessage)
+        .where(
+            OutboxMessage.status == OutboxMessageStatus.PENDING.value,
+            OutboxMessage.scheduled_at <= now,
+        )
+        .order_by(OutboxMessage.created_at.asc())
+        .limit(batch_size)
+    ).scalars().all()
+
+    processed_count = 0
+    for msg in messages:
+        msg.status = OutboxMessageStatus.PROCESSING.value
+        session.commit()
+
+        try:
+            _deliver_outbox_message(msg)
+            msg.status = OutboxMessageStatus.SENT.value
+            msg.sent_at = datetime.now(timezone.utc)
+            msg.last_error = None
+            session.commit()
+            processed_count += 1
+        except Exception as exc:
+            msg.retry_count += 1
+            msg.last_error = str(exc)
+            if msg.retry_count >= msg.max_retries:
+                msg.status = OutboxMessageStatus.FAILED.value
+            else:
+                msg.status = OutboxMessageStatus.PENDING.value
+                msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
             session.commit()
 
-            try:
-                if msg.topic == "email":
-                    to_email = msg.payload.get("to")
-                    subject = msg.payload.get("subject", "Notification from Brightloop")
-                    body = msg.payload.get("body")
+    return {"processed": processed_count, "reclaimed": len(stuck_messages), "batch_size": len(messages)}
 
-                    if not to_email or not body:
-                        raise ValueError(f"Outbox email message {msg.id} missing required 'to' or 'body' field.")
 
-                    email_msg = EmailMessage()
-                    email_msg["Subject"] = subject
-                    email_msg["From"] = settings.SMTP_FROM
-                    email_msg["To"] = to_email
-                    email_msg.set_content(body)
-
-                    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                        server.send_message(email_msg)
-
-                msg.status = OutboxMessageStatus.SENT.value
-                msg.sent_at = datetime.now(timezone.utc)
-                msg.last_error = None
-                session.commit()
-                processed_count += 1
-            except Exception as exc:
-                msg.retry_count += 1
-                msg.last_error = str(exc)
-                if msg.retry_count >= msg.max_retries:
-                    msg.status = OutboxMessageStatus.FAILED.value
-                else:
-                    msg.status = OutboxMessageStatus.PENDING.value
-                    msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
-                session.commit()
-
-        return {"processed": processed_count, "batch_size": len(messages)}
+@celery_app.task(name="tasks.process_outbox_messages")
+def process_outbox_messages(batch_size: int = 50, stuck_timeout_minutes: int = 5):
+    """Celery scheduled task wrapping synchronous outbox processing."""
+    with Session(sync_engine) as session:
+        return _process_outbox_sync(session, batch_size, stuck_timeout_minutes)
 
 
 @celery_app.task(name="tasks.cleanup_outbox_messages")

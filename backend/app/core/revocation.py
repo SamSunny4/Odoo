@@ -8,9 +8,20 @@ from app.core.config import settings
 # Thread-safe in-memory cache of revoked JWT IDs (jti -> expiry_timestamp)
 _revoked_tokens: Dict[str, float] = {}
 _lock = threading.Lock()
+_custom_redis_client = None
+
+
+def set_redis_client(client) -> None:
+    """Inject a custom or mock Redis client (e.g. for testing distributed revocation)."""
+    global _custom_redis_client
+    _custom_redis_client = client
 
 
 def _get_redis_client():
+    global _custom_redis_client
+    if _custom_redis_client is not None:
+        return _custom_redis_client
+
     try:
         import redis
         client = redis.Redis.from_url(
@@ -109,6 +120,7 @@ def is_token_revoked(token_str: str) -> bool:
 
 def reset_revocations() -> None:
     """Clear recorded revocations (useful for tests)."""
+    global _custom_redis_client
+    _custom_redis_client = None
     with _lock:
         _revoked_tokens.clear()
-

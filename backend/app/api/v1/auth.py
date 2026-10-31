@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import verify_password, get_password_hash, create_access_token
 from app.core.revocation import revoke_token
+from app.core.crypto import encrypt_secret
 from app.core.rate_limit import (
     rate_limit_login,
     rate_limit_forgot_password,
@@ -244,9 +245,10 @@ async def forgot_password(
 ):
     """
     Initiate single-use password reset link.
-    Stores token hashed with SHA-256 and persists reset message in outbox.
+    Stores token hashed with SHA-256 and persists encrypted delivery payload in outbox.
     Uses configurable settings.FRONTEND_URL for the reset link.
     Guarantees outbox retry path if direct SMTP dispatch fails.
+    Plaintext secrets are NEVER stored in the database; the reset token is encrypted at rest.
     Enforces sliding-window rate limiting.
     """
     normalized_email = payload.email.lower().strip()
@@ -280,7 +282,7 @@ async def forgot_password(
             f"Brightloop Security Team"
         )
 
-        # Durable outbox message containing the delivery payload
+        # Durable outbox message: token is encrypted with SECRET_KEY so plaintext is NEVER stored in DB
         outbox_msg = await create_outbox_message(
             db,
             topic="email",
@@ -288,11 +290,10 @@ async def forgot_password(
                 "type": "password_reset",
                 "to": user.email,
                 "subject": email_subject,
-                "body": email_body,
-                "reset_link": reset_link,
                 "user_id": str(user.id),
                 "token_id": str(reset_token.id),
                 "expires_at": expires_at.isoformat(),
+                "encrypted_reset_token": encrypt_secret(raw_token),
             },
         )
 

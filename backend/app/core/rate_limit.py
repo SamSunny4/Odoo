@@ -89,9 +89,18 @@ class HybridRateLimiter:
         self._redis_available: Optional[bool] = None
         self._last_redis_check: float = 0
 
+    def set_redis_client(self, client):
+        """Inject a Redis client (useful for testing distributed rate limiting)."""
+        self._redis_client = client
+        self._redis_available = True if client is not None else None
+        self.redis_enabled = client is not None
+
     def _get_redis(self):
         if not self.redis_enabled:
             return None
+
+        if self._redis_client is not None and self._redis_available:
+            return self._redis_client
 
         now = time.time()
         # If Redis recently failed, skip retry for 30s to avoid latency

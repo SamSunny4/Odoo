@@ -1,6 +1,8 @@
 import asyncio
 import pytest
 from app.core.config import settings
+from app.core.rate_limit import login_limiter
+from app.core.revocation import set_redis_client
 
 
 @pytest.mark.asyncio
@@ -65,7 +67,7 @@ async def test_logout_revokes_jwt_server_side(client, seed_users):
     logout_res = await client.post("/api/v1/auth/logout")
     assert logout_res.status_code == 200
 
-    # 3. Simulate an attacker or another client presenting the copied cookie
+    # 3. Simulate an attacker presenting the copied cookie
     client.cookies.set(settings.SESSION_COOKIE_NAME, copied_cookie_token)
     rejected_res = await client.get("/api/v1/auth/me")
     assert rejected_res.status_code == 401
@@ -77,6 +79,37 @@ async def test_logout_revokes_jwt_server_side(client, seed_users):
         headers={"Authorization": f"Bearer {copied_cookie_token}"},
     )
     assert rejected_header_res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_distributed_redis_token_revocation(client, seed_users, mock_redis):
+    """
+    Explicitly tests the distributed Redis path for token revocation.
+    Ensures SETEX is called with TTL on logout, and EXISTS returns true to block copied tokens.
+    """
+    set_redis_client(mock_redis)
+    try:
+        login_res = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@brightloop.local", "password": "Brightloop@12345!"},
+        )
+        assert login_res.status_code == 200
+        token_str = client.cookies[settings.SESSION_COOKIE_NAME]
+
+        # Logout
+        logout_res = await client.post("/api/v1/auth/logout")
+        assert logout_res.status_code == 200
+
+        # Verify mock_redis has the revoked key
+        revoked_keys = [k for k in mock_redis.data if k.startswith("revoked_jwt:")]
+        assert len(revoked_keys) >= 1
+
+        # Request with copied token must be rejected via Redis blacklist check
+        client.cookies.set(settings.SESSION_COOKIE_NAME, token_str)
+        rejected = await client.get("/api/v1/auth/me")
+        assert rejected.status_code == 401
+    finally:
+        set_redis_client(None)
 
 
 @pytest.mark.asyncio
@@ -102,6 +135,7 @@ async def test_login_rate_limiting(client, seed_users):
 @pytest.mark.asyncio
 async def test_atomic_rate_limiting_concurrent_requests(client, seed_users):
     """
+    In-memory concurrency test:
     Simultaneous concurrent requests cannot bypass the rate limiter.
     Out of 8 simultaneous requests against a limit of 5, exactly 5 must pass and 3 must be blocked with HTTP 429.
     """
@@ -118,9 +152,39 @@ async def test_atomic_rate_limiting_concurrent_requests(client, seed_users):
     for r in results:
         status_counts[r.status_code] = status_counts.get(r.status_code, 0) + 1
 
-    # Exactly 5 should be 401 (processed authentication) and 3 should be 429 (blocked by rate limiter)
     assert status_counts.get(401) == 5, f"Expected 5 requests to be processed, got {status_counts}"
     assert status_counts.get(429) == 3, f"Expected 3 requests to be rate-limited with 429, got {status_counts}"
+
+
+@pytest.mark.asyncio
+async def test_distributed_redis_rate_limiting_concurrent(client, seed_users, mock_redis):
+    """
+    Distributed Redis concurrency test:
+    Injects MockDistributedRedis to test the distributed Redis path using atomic Lua scripts.
+    Verifies that the Lua script is evaluated and enforces the rate limit across concurrent requests.
+    """
+    login_limiter.set_redis_client(mock_redis)
+    try:
+        tasks = [
+            client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@brightloop.local", "password": "WrongPassword@999!"},
+            )
+            for _ in range(8)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # Verify that Redis Lua script was invoked
+        assert mock_redis.eval_call_count >= 8
+
+        status_counts = {}
+        for r in results:
+            status_counts[r.status_code] = status_counts.get(r.status_code, 0) + 1
+
+        assert status_counts.get(401) == 5, f"Expected 5 allowed through Redis, got {status_counts}"
+        assert status_counts.get(429) == 3, f"Expected 3 blocked by Redis Lua script, got {status_counts}"
+    finally:
+        login_limiter.set_redis_client(None)
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ import {
   Play,
   ShieldCheck,
   Check,
+  Download,
 } from 'lucide-react';
 
 interface ControlTowerItem {
@@ -423,6 +424,18 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                 <span className="text-xs text-slate-400 ml-2">
                   Preview Run: {runId ? runId.slice(0, 8) : '—'}
                 </span>
+                {runId && (
+                  <a
+                    href={api.getControlTowerRunExportUrl(runId)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2.5 py-1 border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 text-xs font-semibold rounded-md shadow-2xs flex items-center gap-1 transition ml-2"
+                    title="Export preview batch to CSV"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-500" />
+                    Export CSV
+                  </a>
+                )}
               </div>
             </div>
 

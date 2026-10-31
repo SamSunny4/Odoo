@@ -619,40 +619,45 @@ async def commit_billing_preview(
             as_of=as_of,
             allow_empty=allow_empty,
         )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        await db.rollback()
-        run = (await db.execute(
-            select(BillingRun).where(BillingRun.id == billing_run_id).with_for_update()
-        )).scalar_one_or_none()
-        if not run:
+    except HTTPException as exc:
+        if not allow_empty:
             raise
-
-        selected_items = (await db.execute(
-            select(BillingRunItem)
-            .where(
-                BillingRunItem.billing_run_id == billing_run_id,
-                BillingRunItem.id.in_(approved_item_ids),
-            )
-            .with_for_update()
-        )).scalars().all()
+        failure_reason = f"Billing attempt rejected (HTTP {exc.status_code}): {str(exc.detail)[:400]}"
+    except Exception as exc:
         failure_reason = f"Billing attempt failed ({type(exc).__name__}): {str(exc)[:400]}"
-        for item in selected_items:
-            if item.status in (BillingRunItemStatus.PENDING, BillingRunItemStatus.FAILED):
-                item.status = BillingRunItemStatus.FAILED
-                item.warnings = list(item.warnings or []) + [failure_reason]
-        run.status = BillingRunStatus.FAILED
-        await record_audit_event(
-            db,
-            entity_type="billing_run",
-            entity_id=run.id,
-            action="COMMIT_FAILED",
-            actor_user_id=actor_user_id,
-            changes={"failed_item_count": len(selected_items), "reason": failure_reason},
+
+    await db.rollback()
+    run = (await db.execute(
+        select(BillingRun).where(BillingRun.id == billing_run_id).with_for_update()
+    )).scalar_one_or_none()
+    if not run:
+        raise RuntimeError(f"Billing run {billing_run_id} disappeared after a failed commit.")
+
+    selected_items = (await db.execute(
+        select(BillingRunItem)
+        .where(
+            BillingRunItem.billing_run_id == billing_run_id,
+            BillingRunItem.id.in_(approved_item_ids),
         )
-        await db.commit()
-        return run, []
+        .with_for_update()
+    )).scalars().all()
+    failed_count = 0
+    for item in selected_items:
+        if item.status in (BillingRunItemStatus.PENDING, BillingRunItemStatus.FAILED):
+            item.status = BillingRunItemStatus.FAILED
+            item.warnings = list(item.warnings or []) + [failure_reason]
+            failed_count += 1
+    run.status = BillingRunStatus.FAILED
+    await record_audit_event(
+        db,
+        entity_type="billing_run",
+        entity_id=run.id,
+        action="COMMIT_FAILED",
+        actor_user_id=actor_user_id,
+        changes={"failed_item_count": failed_count, "reason": failure_reason},
+    )
+    await db.commit()
+    return run, []
 
 
 async def generate_invoice_for_subscription(

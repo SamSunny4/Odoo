@@ -2,7 +2,7 @@ import uuid
 from typing import List
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -74,6 +74,61 @@ async def preview_billing_batch(
         total_projected_amount=run.total_amount_projected,
         flagged_count=sum(bool(item.warnings) for item in items),
         items=items,
+    )
+
+
+@router.get("/runs/{billing_run_id}/export", tags=["Control Tower"])
+async def export_billing_run_csv(
+    billing_run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_staff_or_admin),
+):
+    """Export preview or run items as CSV for accounting/finance inspection."""
+    import csv, io
+    detail = await get_billing_run(billing_run_id, db=db, _user=_user)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Subscription #",
+        "Customer Name",
+        "Plan",
+        "Period Start",
+        "Period End",
+        "Expected Subtotal",
+        "Expected Tax",
+        "Expected Discount",
+        "Expected Total",
+        "Prior Invoice Total",
+        "Variance Amount",
+        "Variance Reasons",
+        "Warnings",
+        "Status",
+        "Skip Reason",
+    ])
+    for item in detail.items:
+        writer.writerow([
+            item.subscription_number,
+            item.customer_name,
+            item.plan_name,
+            item.billing_period_start.isoformat(),
+            item.billing_period_end.isoformat(),
+            f"{item.expected_subtotal:.2f}",
+            f"{item.expected_tax_amount:.2f}",
+            f"{item.expected_discount_amount:.2f}",
+            f"{item.expected_total_amount:.2f}",
+            f"{item.prior_invoice_total:.2f}" if item.prior_invoice_total is not None else "0.00",
+            f"{item.variance_amount:.2f}" if item.variance_amount is not None else "0.00",
+            "; ".join(item.variance_reasons),
+            "; ".join(item.warnings),
+            item.status,
+            item.skip_reason or "",
+        ])
+    csv_content = output.getvalue()
+    today_str = organization_today().isoformat()
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="billing_run_{billing_run_id}_{today_str}.csv"'},
     )
 
 

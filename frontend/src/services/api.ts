@@ -615,17 +615,51 @@ export interface ControlTowerPreview {
   items: ControlTowerItem[];
 }
 
+export interface DrillDownItem {
+  id: string;
+  entity_type: string;
+  reference_number: string;
+  customer_name: string;
+  customer_account_id?: string | null;
+  plan_name?: string | null;
+  date: string;
+  metric_category: string;
+  status: string;
+  currency: string;
+  amount: MoneyValue;
+  paid_amount?: MoneyValue | null;
+  balance?: MoneyValue | null;
+}
+
+export interface DrillDownReport {
+  metric: string;
+  period_start: string;
+  period_end: string;
+  total_items: number;
+  total_amount: MoneyValue;
+  items: DrillDownItem[];
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 export interface DashboardSummary {
   currency: string;
+  period?: string;
+  period_start?: string;
+  period_end?: string;
   active_subscription_count: number;
   monthly_recurring_revenue: MoneyValue | null;
+  invoiced_revenue?: MoneyValue | null;
   invoiced_mtd: MoneyValue | null;
+  cash_collected?: MoneyValue | null;
   cash_collected_mtd: MoneyValue | null;
   outstanding_balance: MoneyValue | null;
   overdue_balance: MoneyValue | null;
   overdue_invoice_count: number;
   pending_quotes_count: number;
   renewals_due_7d_count: number;
+  metric_definitions?: Record<string, string>;
 }
 
 export interface PaginatedResult<T> {
@@ -998,7 +1032,62 @@ export const api = {
       { method: 'POST' }
     ),
 
-  getDashboardSummary: () => request<DashboardSummary>('/reports/summary'),
+  getDashboardSummary: (params?: { period?: string; start_date?: string; end_date?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.period) q.append('period', params.period);
+    if (params?.start_date) q.append('start_date', params.start_date);
+    if (params?.end_date) q.append('end_date', params.end_date);
+    const qs = q.toString();
+    return request<DashboardSummary>(`/reports/summary${qs ? `?${qs}` : ''}`);
+  },
+  getDrillDownReport: (params: {
+    metric: string;
+    period?: string;
+    start_date?: string;
+    end_date?: string;
+    plan_id?: string;
+    customer_account_id?: string;
+    status?: string;
+    search?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
+    const q = new URLSearchParams();
+    q.append('metric', params.metric);
+    if (params.period) q.append('period', params.period);
+    if (params.start_date) q.append('start_date', params.start_date);
+    if (params.end_date) q.append('end_date', params.end_date);
+    if (params.plan_id) q.append('plan_id', params.plan_id);
+    if (params.customer_account_id) q.append('customer_account_id', params.customer_account_id);
+    if (params.status) q.append('status', params.status);
+    if (params.search) q.append('search', params.search);
+    if (params.page) q.append('page', String(params.page));
+    if (params.page_size) q.append('page_size', String(params.page_size));
+    return request<DrillDownReport>(`/reports/drill-down?${q.toString()}`);
+  },
+  getReportExportUrl: (params: {
+    metric: string;
+    period?: string;
+    start_date?: string;
+    end_date?: string;
+    plan_id?: string;
+    customer_account_id?: string;
+    status?: string;
+    search?: string;
+  }) => {
+    const q = new URLSearchParams();
+    q.append('metric', params.metric);
+    if (params.period) q.append('period', params.period);
+    if (params.start_date) q.append('start_date', params.start_date);
+    if (params.end_date) q.append('end_date', params.end_date);
+    if (params.plan_id) q.append('plan_id', params.plan_id);
+    if (params.customer_account_id) q.append('customer_account_id', params.customer_account_id);
+    if (params.status) q.append('status', params.status);
+    if (params.search) q.append('search', params.search);
+    return `/api/v1/reports/export?${q.toString()}`;
+  },
+  getControlTowerRunExportUrl: (runId: string) => `/api/v1/control-tower/runs/${runId}/export`,
+
 
   // Customer Portal (Derives account from session)
   getPortalSubscriptions: (params?: QueryParams) => requestPaginated<SubscriptionApiItem>('/portal/subscriptions', params),

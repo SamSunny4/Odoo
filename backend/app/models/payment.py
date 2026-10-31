@@ -41,7 +41,7 @@ class Payment(Base, UUIDPrimaryKeyMixin):
         default=PaymentMethod.BANK_TRANSFER,
         nullable=False,
     )
-    payment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    payment_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     reference_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     recorded_by_user_id: Mapped[uuid.UUID] = mapped_column(

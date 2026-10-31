@@ -122,3 +122,4 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
     </nav>
   );
 };
+

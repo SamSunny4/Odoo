@@ -446,8 +446,8 @@ async def get_invoice_pdf(
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found.")
 
-    currency = escape(str(inv.currency or "USD"))
-    money = lambda amount: f"{Decimal(str(amount)):,.2f} {currency}"
+    currency = escape(str(inv.currency or "INR"))
+    money = lambda amount: f"₹{Decimal(str(amount)):,.2f}" if currency in ("INR", "₹") else f"{Decimal(str(amount)):,.2f} {currency}"
     cust = inv.customer_snapshot or {}
     addr = inv.billing_address_snapshot or {}
     company_name = escape(str(cust.get("company_name") or "Valued Customer"))

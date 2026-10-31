@@ -266,7 +266,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
       setVariantForm({ name: '', price_adjustment: '0.00' });
       setFeedback({
         type: 'success',
-        message: `Variant "${variantForm.name}" (+${variantForm.price_adjustment}) added.`,
+        message: `Variant "${variantForm.name}" (+₹${variantForm.price_adjustment}) added.`,
       });
       fetchProducts();
     } catch (err) {
@@ -295,7 +295,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
         title="Products & Variants Catalog"
         subtitle={
           isAdmin
-            ? 'Configure products, pricing, and brand variants with exact price adjustments (e.g. Odoo brand adds +$560).'
+            ? 'Configure products, pricing, and brand variants with exact price adjustments (e.g. Odoo brand adds +₹560).'
             : 'View product catalog and active selling prices (Cost prices restricted to Admin).'
         }
         breadcrumbs={[
@@ -415,7 +415,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
                                 <Tag className="w-3 h-3 text-indigo-500" />
                                 {v.name}
                                 <span className="font-semibold text-indigo-900">
-                                  (+${Number(v.price_adjustment).toFixed(2)})
+                                  (+₹${Number(v.price_adjustment).toFixed(2)})
                                 </span>
                               </span>
                             ))

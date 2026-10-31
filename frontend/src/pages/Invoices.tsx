@@ -264,7 +264,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
 
       setFeedback({
         type: 'success',
-        message: `Payment of $${amountNum.toFixed(2)} recorded successfully against invoice ${paymentModalInvoice.invoice_number}.`,
+        message: `Payment of ₹${amountNum.toFixed(2)} recorded successfully against invoice ${paymentModalInvoice.invoice_number}.`,
       });
       setPaymentModalInvoice(null);
       fetchInvoices();
@@ -312,7 +312,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
       await api.reversePayment(reversalModalPayment.id, reversalReason.trim(), revAmountNum);
       setFeedback({
         type: 'success',
-        message: `Payment reversal of $${revAmountNum.toFixed(2)} recorded and invoice balance adjusted.`,
+        message: `Payment reversal of ₹${revAmountNum.toFixed(2)} recorded and invoice balance adjusted.`,
       });
       setReversalModalPayment(null);
       fetchInvoices();
@@ -614,7 +614,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                               {isPartiallyPaid ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                                   <Clock className="w-3 h-3 text-amber-600" />
-                                  Part-Paid (${Number(inv.paid_amount).toFixed(2)})
+                                  Part-Paid (₹${Number(inv.paid_amount).toFixed(2)})
                                 </span>
                               ) : inv.is_overdue && inv.status === 'confirmed' ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800">
@@ -822,7 +822,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                             {p.reference_note || '—'}
                             {(p.reversals || (p.reversal ? [p.reversal] : [])).map((reversal) => (
                               <span key={reversal.id} className="block text-red-600 font-medium">
-                                Refund ${Number(reversal.reversal_amount).toFixed(2)}: {reversal.reason}
+                                Refund ₹${Number(reversal.reversal_amount).toFixed(2)}: {reversal.reason}
                               </span>
                             ))}
                           </td>
@@ -1240,9 +1240,9 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                             )}
                           </td>
                           <td className="py-2.5 px-2 text-center">{line.quantity}</td>
-                          <td className="py-2.5 px-2 text-right font-mono">${Number(line.unit_price_snapshot).toFixed(2)}</td>
+                          <td className="py-2.5 px-2 text-right font-mono">₹{Number(line.unit_price_snapshot).toFixed(2)}</td>
                           <td className="py-2.5 px-2 text-right font-mono text-emerald-600">
-                            {Number(line.discount_amount) > 0 ? `-$${Number(line.discount_amount).toFixed(2)}` : '—'}
+                            {Number(line.discount_amount) > 0 ? `-₹${Number(line.discount_amount).toFixed(2)}` : '—'}
                           </td>
                           <td className="py-2.5 px-2 text-right font-mono">
                             ${Number(line.tax_amount).toFixed(2)}
@@ -1257,7 +1257,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                   <div className="p-3 bg-slate-50 border-t border-slate-200 space-y-1 text-xs">
                     <div className="flex justify-between text-slate-600">
                       <span>Subtotal:</span>
-                      <span className="font-mono">${Number(selectedInvoice.subtotal || 0).toFixed(2)}</span>
+                      <span className="font-mono">₹{Number(selectedInvoice.subtotal || 0).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-emerald-600">
                       <span>Discounts:</span>
@@ -1265,15 +1265,15 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                     </div>
                     <div className="flex justify-between text-slate-600">
                       <span>Taxes:</span>
-                      <span className="font-mono">+${Number(selectedInvoice.tax_amount || 0).toFixed(2)}</span>
+                      <span className="font-mono">+₹{Number(selectedInvoice.tax_amount || 0).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm font-bold text-slate-900 pt-1 border-t border-slate-200">
                       <span>Total Invoice Amount:</span>
-                      <span className="font-mono">${Number(selectedInvoice.total_amount).toFixed(2)}</span>
+                      <span className="font-mono">₹{Number(selectedInvoice.total_amount).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-xs font-semibold text-emerald-700 pt-0.5">
                       <span>Total Settled (Paid):</span>
-                      <span className="font-mono">${Number(selectedInvoice.paid_amount || 0).toFixed(2)}</span>
+                      <span className="font-mono">₹{Number(selectedInvoice.paid_amount || 0).toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm font-bold text-red-600 pt-1 border-t border-slate-200">
                       <span>Remaining Balance Due:</span>
@@ -1492,7 +1492,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
         title="Reverse / Refund Payment"
         subtitle={
           reversalModalPayment
-            ? `Payment of $${Number(reversalModalPayment.amount).toFixed(2)} on invoice ${reversalModalPayment.invoice_number || ''}`
+            ? `Payment of ₹${Number(reversalModalPayment.amount).toFixed(2)} on invoice ${reversalModalPayment.invoice_number || ''}`
             : undefined
         }
       >

@@ -34,7 +34,7 @@ class CustomerAccount(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     billing_state: Mapped[str] = mapped_column(String(100), nullable=True)
     billing_postal_code: Mapped[str] = mapped_column(String(20), nullable=False)
     billing_country: Mapped[str] = mapped_column(String(2), nullable=False)  # ISO 3166-1 alpha-2
-    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
 
     # Relationships
     memberships: Mapped[List["CustomerAccountMembership"]] = relationship(

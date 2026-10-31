@@ -179,7 +179,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
       const result = await api.commitControlTowerPreview(runId, selectedIds);
       setCommitted(true);
       setCommitMessage(
-        `${result.invoices_created_count} invoices created for $${Number(
+        `${result.invoices_created_count} invoices created for ₹${Number(
           result.total_invoiced_amount
         ).toFixed(2)}. ${result.failed_count} items need retry.`
       );
@@ -376,7 +376,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-semibold uppercase">Projected Batch Total</div>
-              <div className="text-base font-bold text-indigo-600">${totalProjected.toFixed(2)}</div>
+              <div className="text-base font-bold text-indigo-600">₹{totalProjected.toFixed(2)}</div>
             </div>
             <div>
               <div className="text-xs text-slate-400 font-semibold uppercase">Flagged Items</div>
@@ -486,7 +486,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                         </td>
                         <td className="py-3 px-4 text-right text-xs font-mono text-slate-600">
                           ${Number(item.expected_subtotal).toFixed(2)} − $
-                          {Number(item.expected_discount_amount).toFixed(2)} + $
+                          {Number(item.expected_discount_amount).toFixed(2)} + ₹
                           {Number(item.expected_tax_amount).toFixed(2)}
                         </td>
                         <td className="py-3 px-4 text-right font-semibold font-mono text-slate-900">

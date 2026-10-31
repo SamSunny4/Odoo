@@ -15,13 +15,12 @@ import { PaginationControls } from '../components/common/PaginationControls';
 import {
   AlertTriangle,
   CalendarCheck,
-  DollarSign,
+  IndianRupee,
   TrendingUp,
   Users,
   RefreshCw,
   Download,
   Info,
-  Radio,
   ArrowRight,
   ShieldCheck,
   Receipt,
@@ -117,17 +116,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const money = (value: MoneyValue | null | undefined) =>
     value === null || value === undefined
       ? '—'
-      : new Intl.NumberFormat(undefined, {
+      : new Intl.NumberFormat('en-IN', {
           style: 'currency',
-          currency: summary?.currency || 'USD',
+          currency: summary?.currency || 'INR',
+          maximumFractionDigits: 2,
         }).format(Number(value));
 
   const moneyForCurrency = (value: MoneyValue | null | undefined, currency?: string) =>
     value === null || value === undefined
       ? '—'
-      : new Intl.NumberFormat(undefined, {
+      : new Intl.NumberFormat('en-IN', {
           style: 'currency',
-          currency: currency || summary?.currency || 'USD',
+          currency: currency || summary?.currency || 'INR',
+          maximumFractionDigits: 2,
         }).format(Number(value));
 
   const handleCardClick = (metricKey: string) => {
@@ -160,7 +161,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     label: string,
     value: string,
     detail: string,
-    Icon: typeof DollarSign,
+    Icon: typeof IndianRupee,
     color: string,
     metricKey?: string,
     isActive?: boolean
@@ -326,7 +327,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               'Monthly Recurring Revenue',
               money(summary?.monthly_recurring_revenue),
               'Active contract run rate (MRR)',
-              DollarSign,
+              IndianRupee,
               'text-indigo-600',
               'mrr',
               activeMetric === 'mrr'
@@ -392,35 +393,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           </>
         )}
       </div>
-
-      {/* Billing Control Tower Quick-Access */}
-      <div className="relative overflow-hidden bg-gradient-to-r from-sky-500 via-sky-600 to-sky-700 text-white rounded-2xl p-5 shadow-sm shadow-sky-600/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-sky-400/30">
-        <div className="absolute -top-12 -right-12 w-48 h-48 bg-yellow-300/20 rounded-full blur-2xl pointer-events-none" />
-        <div className="space-y-1.5 relative z-10">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-xs flex items-center justify-center text-yellow-300 font-bold border border-white/20">
-              <Radio className="w-4 h-4 text-yellow-300" />
-            </div>
-            <div>
-              <span className="font-bold text-base text-white tracking-tight">Billing Control Tower</span>
-              <span className="ml-2.5 text-xs font-bold text-yellow-300 bg-yellow-400/20 px-2 py-0.5 rounded-full border border-yellow-300/30 hidden sm:inline">
-                Automated Batch Review
-              </span>
-            </div>
-          </div>
-          <p className="text-xs text-sky-100 max-w-2xl leading-relaxed">
-            Preview upcoming subscription charges before generating invoices. Flags price changes, expired discounts, and prevents duplicate billing.
-          </p>
-        </div>
-        <button
-          onClick={() => onNavigate && onNavigate('control-tower')}
-          className="relative z-10 px-4 py-2.5 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold text-xs sm:text-sm rounded-xl shadow-md shadow-yellow-500/20 transition shrink-0 flex items-center gap-1.5 self-start sm:self-auto hover:-translate-y-0.5 active:translate-y-0"
-        >
-          <span>Open Control Tower</span>
-          <ArrowRight className="w-4 h-4 text-slate-950 stroke-[2.5]" />
-        </button>
-      </div>
-
       {/* ADMIN DRILL-DOWN LEDGER (Phase 8 Requirement) */}
       {isAdmin && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden space-y-4 p-5">

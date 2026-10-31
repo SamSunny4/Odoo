@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/brightloop_subscriptions"
 
     # Business Rules Defaults
-    ORGANIZATION_CURRENCY: str = "USD"
+    ORGANIZATION_CURRENCY: str = "INR"
     ORGANIZATION_TIMEZONE: str = "UTC"
 
     # Background Services

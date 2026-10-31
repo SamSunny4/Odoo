@@ -12,6 +12,7 @@ import { Plus, CheckCircle, Clock, Pause, RefreshCw, XCircle } from 'lucide-reac
 const STATUS_OPTIONS: FilterOption[] = [
   { label: 'Active', value: 'active' },
   { label: 'Quotation', value: 'quotation' },
+  { label: 'Confirmed', value: 'confirmed' },
   { label: 'Paused', value: 'paused' },
   { label: 'Closed', value: 'closed' },
   { label: 'Draft', value: 'draft' },
@@ -24,7 +25,11 @@ const SORT_OPTIONS: SortOption[] = [
   { label: 'Next Billing Date', sortBy: 'next_billing_date', sortOrder: 'asc' },
 ];
 
-export const Subscriptions: React.FC = () => {
+interface SubscriptionsProps {
+  onNavigate?: (tabKey: string) => void;
+}
+
+export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
   const [subscriptions, setSubscriptions] = useState<SubscriptionApiItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
@@ -151,10 +156,11 @@ export const Subscriptions: React.FC = () => {
         title="Subscriptions & Quotations"
         subtitle="Manage recurring customer subscriptions, quotations, and lifecycle statuses."
         breadcrumbs={[
-          { label: 'Brightloop' },
-          { label: 'Operations' },
+          { label: 'Brightloop', tabKey: 'dashboard' },
+          { label: 'Operations', tabKey: 'dashboard' },
           { label: 'Subscriptions & Quotes' },
         ]}
+        onSelectTab={onNavigate}
         badge={
           <span
             className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${

@@ -29,7 +29,7 @@ async def list_invoices(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(10, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search term for invoice # or customer name"),
-    status: Optional[str] = Query(None, description="Filter by status: draft, confirmed, paid, canceled, or 'overdue'"),
+    status: Optional[str] = Query(None, description="Filter by status: draft, confirmed, paid, cancelled, or 'overdue'"),
     sort_by: Optional[str] = Query("issue_date", description="Sort field: issue_date, due_date, total_amount, outstanding_balance, invoice_number"),
     sort_order: Optional[str] = Query("desc", description="Sort direction: asc or desc"),
     envelope: bool = Query(False, description="Return wrapped object with pagination metadata"),
@@ -67,6 +67,8 @@ async def list_invoices(
         if s == "overdue":
             filters.append(Invoice.is_overdue == True)  # noqa: E712
         else:
+            if s == "canceled":
+                s = "cancelled"
             try:
                 status_enum = InvoiceStatus(s)
                 filters.append(Invoice.status == status_enum)

@@ -168,7 +168,7 @@ async def get_my_invoices(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(10, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search term for invoice #"),
-    status: Optional[str] = Query(None, description="Filter by status: draft, confirmed, paid, canceled, overdue"),
+    status: Optional[str] = Query(None, description="Filter by status: draft, confirmed, paid, cancelled, overdue"),
     sort_by: Optional[str] = Query("issue_date", description="Sort by: issue_date, due_date, total_amount, invoice_number"),
     sort_order: Optional[str] = Query("desc", description="Sort direction: asc or desc"),
     envelope: bool = Query(False, description="Return wrapped object with pagination metadata"),
@@ -199,6 +199,8 @@ async def get_my_invoices(
         if s == "overdue":
             filters.append(Invoice.is_overdue == True)  # noqa: E712
         else:
+            if s == "canceled":
+                s = "cancelled"
             try:
                 status_enum = InvoiceStatus(s)
                 filters.append(Invoice.status == status_enum)
@@ -217,6 +219,8 @@ async def get_my_invoices(
         sort_col = Invoice.due_date
     elif sort_by == "total_amount":
         sort_col = Invoice.total_amount
+    elif sort_by == "outstanding_balance":
+        sort_col = Invoice.outstanding_balance
     elif sort_by == "invoice_number":
         sort_col = Invoice.invoice_number
 

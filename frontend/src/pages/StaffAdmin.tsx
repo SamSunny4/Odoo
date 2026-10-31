@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { api, StaffUserItem } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/common/PageHeader';
-import { SearchAndFilterBar, FilterOption } from '../components/common/SearchAndFilterBar';
+import { SearchAndFilterBar, FilterOption, SortOption } from '../components/common/SearchAndFilterBar';
 import { PaginationControls } from '../components/common/PaginationControls';
 import { LoadingState } from '../components/common/LoadingState';
 import { EmptyState } from '../components/common/EmptyState';
@@ -25,7 +25,18 @@ const ROLE_OPTIONS: FilterOption[] = [
   { label: 'Staff', value: 'staff' },
 ];
 
-export const StaffAdmin: React.FC = () => {
+const SORT_OPTIONS: SortOption[] = [
+  { label: 'Newest First', sortBy: 'created_at', sortOrder: 'desc' },
+  { label: 'Oldest First', sortBy: 'created_at', sortOrder: 'asc' },
+  { label: 'Name (A-Z)', sortBy: 'full_name', sortOrder: 'asc' },
+  { label: 'Email (A-Z)', sortBy: 'email', sortOrder: 'asc' },
+];
+
+interface StaffAdminProps {
+  onNavigate?: (tabKey: string) => void;
+}
+
+export const StaffAdmin: React.FC<StaffAdminProps> = ({ onNavigate }) => {
   const { user: currentUser } = useAuth();
   const [staffList, setStaffList] = useState<StaffUserItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -39,6 +50,7 @@ export const StaffAdmin: React.FC = () => {
   const [totalPages, setTotalPages] = useState<number>(1);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [sortValue, setSortValue] = useState<string>('created_at-desc');
 
   // Modal State
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
@@ -55,12 +67,15 @@ export const StaffAdmin: React.FC = () => {
   const fetchStaff = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const [sortBy, sortOrder] = sortValue.split('-') as [string, 'asc' | 'desc'];
     try {
       const data = await api.getStaff({
         page,
         pageSize,
         search: searchQuery || undefined,
         role: roleFilter !== 'all' ? roleFilter : undefined,
+        sortBy,
+        sortOrder,
       });
       setStaffList(data.items);
       setTotal(data.total);
@@ -71,7 +86,7 @@ export const StaffAdmin: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, searchQuery, roleFilter]);
+  }, [page, pageSize, searchQuery, roleFilter, sortValue]);
 
   useEffect(() => {
     fetchStaff();
@@ -166,16 +181,24 @@ export const StaffAdmin: React.FC = () => {
   const totalStaff = staffList.filter((s) => s.role === 'staff').length;
   const totalActive = staffList.filter((s) => s.is_active).length;
 
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    setRoleFilter('all');
+    setSortValue('created_at-desc');
+    setPage(1);
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Staff & Access Management"
         subtitle="Manage authorized staff members, role boundaries, and operational privileges."
         breadcrumbs={[
-          { label: 'Brightloop' },
-          { label: 'Catalog & Configuration' },
+          { label: 'Brightloop', tabKey: 'dashboard' },
+          { label: 'Catalog & Configuration', tabKey: 'catalog' },
           { label: 'Staff & Access' },
         ]}
+        onSelectTab={onNavigate}
         actions={
           <button
             onClick={() => setShowAddModal(true)}
@@ -200,19 +223,19 @@ export const StaffAdmin: React.FC = () => {
       {/* Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Team</div>
+          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Matching Accounts</div>
           <div className="text-2xl font-bold text-slate-900 mt-1">{total}</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Administrators</div>
+          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Admins on Page</div>
           <div className="text-2xl font-bold text-indigo-700 mt-1">{totalAdmins}</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Operations Staff</div>
+          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Staff on Page</div>
           <div className="text-2xl font-bold text-slate-800 mt-1">{totalStaff}</div>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Active Users</div>
+          <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Active on Page</div>
           <div className="text-2xl font-bold text-emerald-600 mt-1">{totalActive}</div>
         </div>
       </div>
@@ -230,11 +253,13 @@ export const StaffAdmin: React.FC = () => {
           setPage(1);
         }}
         statusOptions={ROLE_OPTIONS}
-        onReset={() => {
-          setSearchQuery('');
-          setRoleFilter('all');
+        sortValue={sortValue}
+        onSortChange={(value) => {
+          setSortValue(value);
           setPage(1);
         }}
+        sortOptions={SORT_OPTIONS}
+        onReset={handleResetFilters}
       />
 
       {/* Staff Table */}
@@ -247,11 +272,7 @@ export const StaffAdmin: React.FC = () => {
             description="There are no staff members matching your search or filters."
             action={{
               label: 'Clear Filters',
-              onClick: () => {
-                setSearchQuery('');
-                setRoleFilter('all');
-                setPage(1);
-              },
+              onClick: handleResetFilters,
             }}
           />
         ) : (

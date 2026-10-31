@@ -45,9 +45,20 @@ export const AppContent: React.FC = () => {
     return <Login />;
   }
 
+  const navigateFromBreadcrumb = (tabKey: string) => {
+    if (user.role === 'customer') {
+      setCurrentTab(tabKey.startsWith('portal-') ? tabKey : 'portal-subscriptions');
+      return;
+    }
+    if (user.role === 'staff' && ['plans', 'discounts', 'team'].includes(tabKey)) {
+      return;
+    }
+    setCurrentTab(tabKey);
+  };
+
   const renderContent = () => {
     if (user.role === 'customer') {
-      return <CustomerPortal activeTab={currentTab} />;
+      return <CustomerPortal activeTab={currentTab} onNavigate={navigateFromBreadcrumb} />;
     }
 
     // Role-based route guard for staff vs admin
@@ -74,17 +85,17 @@ export const AppContent: React.FC = () => {
 
     switch (currentTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard onNavigate={navigateFromBreadcrumb} />;
       case 'control-tower':
-        return <ControlTower />;
+        return <ControlTower onNavigate={navigateFromBreadcrumb} />;
       case 'catalog':
-        return <Catalog />;
+        return <Catalog onNavigate={navigateFromBreadcrumb} />;
       case 'subscriptions':
-        return <Subscriptions />;
+        return <Subscriptions onNavigate={navigateFromBreadcrumb} />;
       case 'invoices':
-        return <Invoices />;
+        return <Invoices onNavigate={navigateFromBreadcrumb} />;
       case 'team':
-        return <StaffAdmin />;
+        return <StaffAdmin onNavigate={navigateFromBreadcrumb} />;
       case 'plans':
       case 'discounts':
         return (

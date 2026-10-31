@@ -39,9 +39,14 @@ export const SearchAndFilterBar: React.FC<SearchAndFilterBarProps> = ({
   onReset,
   children,
 }) => {
+  const defaultSortValue = sortOptions?.[0]
+    ? `${sortOptions[0].sortBy}-${sortOptions[0].sortOrder}`
+    : undefined;
+  const sortChanged = Boolean(sortValue && defaultSortValue && sortValue !== defaultSortValue);
   const hasActiveFilters = Boolean(
-    searchQuery ||
-    (statusFilter && statusFilter !== 'all')
+    searchQuery.trim() ||
+    (statusFilter && statusFilter !== 'all') ||
+    sortChanged
   );
 
   return (

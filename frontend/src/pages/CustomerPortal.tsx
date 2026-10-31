@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api, InvoiceApiItem, PortalProfile, SubscriptionApiItem } from '../services/api';
 import { PageHeader } from '../components/common/PageHeader';
-import { SearchAndFilterBar } from '../components/common/SearchAndFilterBar';
+import { SearchAndFilterBar, FilterOption, SortOption } from '../components/common/SearchAndFilterBar';
 import { PaginationControls } from '../components/common/PaginationControls';
 import { LoadingState } from '../components/common/LoadingState';
 import { EmptyState } from '../components/common/EmptyState';
@@ -11,10 +11,44 @@ import { CheckCircle2, Download, RefreshCw, CalendarDays, Receipt, Building } fr
 
 interface CustomerPortalProps {
   activeTab?: string;
+  onNavigate?: (tabKey: string) => void;
 }
+
+const SUBSCRIPTION_STATUS_OPTIONS: FilterOption[] = [
+  { label: 'Active', value: 'active' },
+  { label: 'Quotation', value: 'quotation' },
+  { label: 'Confirmed', value: 'confirmed' },
+  { label: 'Paused', value: 'paused' },
+  { label: 'Closed', value: 'closed' },
+  { label: 'Draft', value: 'draft' },
+];
+
+const SUBSCRIPTION_SORT_OPTIONS: SortOption[] = [
+  { label: 'Newest First', sortBy: 'created_at', sortOrder: 'desc' },
+  { label: 'Oldest First', sortBy: 'created_at', sortOrder: 'asc' },
+  { label: 'Subscription # (A-Z)', sortBy: 'subscription_number', sortOrder: 'asc' },
+  { label: 'Next Billing Date', sortBy: 'next_billing_date', sortOrder: 'asc' },
+];
+
+const INVOICE_STATUS_OPTIONS: FilterOption[] = [
+  { label: 'Confirmed', value: 'confirmed' },
+  { label: 'Paid', value: 'paid' },
+  { label: 'Overdue', value: 'overdue' },
+  { label: 'Draft', value: 'draft' },
+  { label: 'Cancelled', value: 'cancelled' },
+];
+
+const INVOICE_SORT_OPTIONS: SortOption[] = [
+  { label: 'Issue Date (Newest)', sortBy: 'issue_date', sortOrder: 'desc' },
+  { label: 'Issue Date (Oldest)', sortBy: 'issue_date', sortOrder: 'asc' },
+  { label: 'Due Date (Earliest)', sortBy: 'due_date', sortOrder: 'asc' },
+  { label: 'Total Amount (High to Low)', sortBy: 'total_amount', sortOrder: 'desc' },
+  { label: 'Outstanding Balance', sortBy: 'outstanding_balance', sortOrder: 'desc' },
+];
 
 export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   activeTab = 'portal-subscriptions',
+  onNavigate,
 }) => {
   const { user } = useAuth();
   const [profile, setProfile] = useState<PortalProfile | null>(null);
@@ -29,6 +63,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [subsTotal, setSubsTotal] = useState<number>(0);
   const [subsTotalPages, setSubsTotalPages] = useState<number>(1);
   const [subsSearch, setSubsSearch] = useState<string>('');
+  const [subsStatus, setSubsStatus] = useState<string>('all');
+  const [subsSort, setSubsSort] = useState<string>('created_at-desc');
 
   // Invoices Tab State
   const [invoices, setInvoices] = useState<InvoiceApiItem[]>([]);
@@ -38,6 +74,8 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [invsTotal, setInvsTotal] = useState<number>(0);
   const [invsTotalPages, setInvsTotalPages] = useState<number>(1);
   const [invsSearch, setInvsSearch] = useState<string>('');
+  const [invsStatus, setInvsStatus] = useState<string>('all');
+  const [invsSort, setInvsSort] = useState<string>('issue_date-desc');
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -51,11 +89,15 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
 
   const fetchSubscriptions = useCallback(async () => {
     setSubsLoading(true);
+    const [sortBy, sortOrder] = subsSort.split('-') as [string, 'asc' | 'desc'];
     try {
       const data = await api.getPortalSubscriptions({
         page: subsPage,
         pageSize: subsPageSize,
         search: subsSearch || undefined,
+        status: subsStatus !== 'all' ? subsStatus : undefined,
+        sortBy,
+        sortOrder,
       });
       setSubscriptions(data.items);
       setSubsTotal(data.total);
@@ -67,15 +109,19 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     } finally {
       setSubsLoading(false);
     }
-  }, [subsPage, subsPageSize, subsSearch]);
+  }, [subsPage, subsPageSize, subsSearch, subsStatus, subsSort]);
 
   const fetchInvoices = useCallback(async () => {
     setInvsLoading(true);
+    const [sortBy, sortOrder] = invsSort.split('-') as [string, 'asc' | 'desc'];
     try {
       const data = await api.getPortalInvoices({
         page: invsPage,
         pageSize: invsPageSize,
         search: invsSearch || undefined,
+        status: invsStatus !== 'all' ? invsStatus : undefined,
+        sortBy,
+        sortOrder,
       });
       setInvoices(data.items);
       setInvsTotal(data.total);
@@ -87,7 +133,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
     } finally {
       setInvsLoading(false);
     }
-  }, [invsPage, invsPageSize, invsSearch]);
+  }, [invsPage, invsPageSize, invsSearch, invsStatus, invsSort]);
 
   useEffect(() => {
     fetchProfile();
@@ -120,9 +166,10 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
         title={profile?.company_name || user?.companyName || 'Customer Portal'}
         subtitle={`Signed in as ${user?.email || 'Customer'} (Scoped strictly to your company account)`}
         breadcrumbs={[
-          { label: 'Customer Portal' },
+          { label: 'Customer Portal', tabKey: 'portal-subscriptions' },
           { label: getTabTitle() },
         ]}
+        onSelectTab={onNavigate}
         badge={
           <span
             className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
@@ -156,8 +203,22 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               setSubsPage(1);
             }}
             searchPlaceholder="Search your subscriptions by #..."
+            statusFilter={subsStatus}
+            onStatusChange={(value) => {
+              setSubsStatus(value);
+              setSubsPage(1);
+            }}
+            statusOptions={SUBSCRIPTION_STATUS_OPTIONS}
+            sortValue={subsSort}
+            onSortChange={(value) => {
+              setSubsSort(value);
+              setSubsPage(1);
+            }}
+            sortOptions={SUBSCRIPTION_SORT_OPTIONS}
             onReset={() => {
               setSubsSearch('');
+              setSubsStatus('all');
+              setSubsSort('created_at-desc');
               setSubsPage(1);
             }}
           />
@@ -237,8 +298,22 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
               setInvsPage(1);
             }}
             searchPlaceholder="Search your invoices by #..."
+            statusFilter={invsStatus}
+            onStatusChange={(value) => {
+              setInvsStatus(value);
+              setInvsPage(1);
+            }}
+            statusOptions={INVOICE_STATUS_OPTIONS}
+            sortValue={invsSort}
+            onSortChange={(value) => {
+              setInvsSort(value);
+              setInvsPage(1);
+            }}
+            sortOptions={INVOICE_SORT_OPTIONS}
             onReset={() => {
               setInvsSearch('');
+              setInvsStatus('all');
+              setInvsSort('issue_date-desc');
               setInvsPage(1);
             }}
           />

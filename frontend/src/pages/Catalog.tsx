@@ -11,8 +11,7 @@ import { Lock, Plus, Tag, RefreshCw } from 'lucide-react';
 
 const TYPE_OPTIONS: FilterOption[] = [
   { label: 'Service', value: 'service' },
-  { label: 'Consumable', value: 'consu' },
-  { label: 'Storable Product', value: 'product' },
+  { label: 'Goods', value: 'goods' },
 ];
 
 const SORT_OPTIONS: SortOption[] = [
@@ -22,7 +21,11 @@ const SORT_OPTIONS: SortOption[] = [
   { label: 'Sales Price (Low to High)', sortBy: 'sales_price', sortOrder: 'asc' },
 ];
 
-export const Catalog: React.FC = () => {
+interface CatalogProps {
+  onNavigate?: (tabKey: string) => void;
+}
+
+export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [products, setProducts] = useState<ProductApiItem[]>([]);
@@ -89,10 +92,11 @@ export const Catalog: React.FC = () => {
             : 'View product catalog and active selling prices (Cost prices restricted to Admin).'
         }
         breadcrumbs={[
-          { label: 'Brightloop' },
-          { label: 'Catalog & Configuration' },
+          { label: 'Brightloop', tabKey: 'dashboard' },
+          { label: 'Catalog & Configuration', tabKey: 'catalog' },
           { label: 'Products & Variants' },
         ]}
+        onSelectTab={onNavigate}
         badge={
           <span
             className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${

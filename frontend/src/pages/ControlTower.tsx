@@ -32,7 +32,11 @@ interface PreviewResponse {
   items: ControlTowerItem[];
 }
 
-export const ControlTower: React.FC = () => {
+interface ControlTowerProps {
+  onNavigate?: (tabKey: string) => void;
+}
+
+export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [items, setItems] = useState<ControlTowerItem[]>([]);
@@ -108,10 +112,11 @@ export const ControlTower: React.FC = () => {
         title="Billing Control Tower"
         subtitle="Inspect calculated invoices, review variances, and select clean items for billing."
         breadcrumbs={[
-          { label: 'Brightloop' },
-          { label: 'Operations' },
+          { label: 'Brightloop', tabKey: 'dashboard' },
+          { label: 'Operations', tabKey: 'dashboard' },
           { label: 'Control Tower' },
         ]}
+        onSelectTab={onNavigate}
         badge={
           <span className="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
             <Sparkles className="w-3 h-3" /> Standout Feature

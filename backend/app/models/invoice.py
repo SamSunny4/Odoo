@@ -4,10 +4,11 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import (
-    String, Numeric, Integer, Date, DateTime, Enum, ForeignKey, Text, JSON,
+    String, Numeric, Integer, Date, DateTime, Enum, ForeignKey, Text, JSON, and_, case,
     CheckConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
 from app.core.clock import organization_today
@@ -120,18 +121,33 @@ class Invoice(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         back_populates="invoice",
     )
 
-    @property
+    @hybrid_property
     def outstanding_balance(self) -> Decimal:
         """Remaining balance on the invoice."""
         return max(Decimal("0.00"), self.total_amount - self.paid_amount)
 
-    @property
+    @outstanding_balance.expression
+    def outstanding_balance(cls):
+        return case(
+            (cls.total_amount > cls.paid_amount, cls.total_amount - cls.paid_amount),
+            else_=Decimal("0.00"),
+        )
+
+    @hybrid_property
     def is_overdue(self) -> bool:
         """Derived dynamically from due date and balance."""
         return (
             self.status == InvoiceStatus.CONFIRMED
             and organization_today() > self.due_date
             and self.outstanding_balance > Decimal("0.00")
+        )
+
+    @is_overdue.expression
+    def is_overdue(cls):
+        return and_(
+            cls.status == InvoiceStatus.CONFIRMED,
+            cls.due_date < organization_today(),
+            cls.paid_amount < cls.total_amount,
         )
 
 

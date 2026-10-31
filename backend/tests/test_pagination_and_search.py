@@ -115,7 +115,7 @@ async def test_invoices_pagination_search_and_headers(client, db_session, seed_u
             total_amount=Decimal("110.00"),
             paid_amount=Decimal("110.00") if i >= 2 else Decimal("0.00"),
             issue_date=date(2026, 1, 1 + i),
-            due_date=date(2026, 1, 31),
+            due_date=date(2000, 1, 31),
             send_status=SendStatus.NOT_SENT,
             customer_snapshot={"name": "Acme Corp"},
             billing_address_snapshot={"address": "100 Innovation Blvd"},
@@ -145,13 +145,36 @@ async def test_invoices_pagination_search_and_headers(client, db_session, seed_u
     paid_items = res_paid.json()
     assert all(item["status"] == "paid" for item in paid_items)
 
+    # Computed overdue filtering and outstanding-balance sorting are SQL-backed.
+    res_overdue = await client.get("/api/v1/invoices?status=overdue")
+    assert res_overdue.status_code == 200
+    overdue_items = res_overdue.json()
+    assert len(overdue_items) == 2
+    assert all(item["is_overdue"] for item in overdue_items)
+
+    res_balance_sort = await client.get(
+        "/api/v1/invoices?sort_by=outstanding_balance&sort_order=desc"
+    )
+    assert res_balance_sort.status_code == 200
+    balances = [Decimal(str(item["outstanding_balance"])) for item in res_balance_sort.json()]
+    assert balances == sorted(balances, reverse=True)
+
 
 @pytest.mark.asyncio
-async def test_products_pagination_and_search(client, seed_users):
+async def test_products_pagination_and_search(client, db_session, seed_users):
     """
     Test server-side search and pagination on /api/v1/products.
     """
     admin = seed_users["admin"]
+    goods = Product(
+        name="Brightloop Hardware",
+        type=ProductType.GOODS,
+        sales_price=Decimal("75.00"),
+        cost_price=Decimal("30.00"),
+        is_active=True,
+    )
+    db_session.add(goods)
+    await db_session.commit()
     client.cookies.update(auth_cookies(admin))
 
     res = await client.get("/api/v1/products?page=1&page_size=1")
@@ -164,6 +187,11 @@ async def test_products_pagination_and_search(client, seed_users):
     assert res_erp.status_code == 200
     items = res_erp.json()
     assert any("Core ERP" in p["name"] for p in items)
+
+    res_goods = await client.get("/api/v1/products?type=goods")
+    assert res_goods.status_code == 200
+    assert len(res_goods.json()) == 1
+    assert res_goods.json()[0]["type"] == "goods"
 
 
 @pytest.mark.asyncio
@@ -199,6 +227,67 @@ async def test_portal_pagination_and_isolation(client, db_session, seed_users):
     assert int(res.headers["X-Total-Count"]) >= 3
     # All items belong to Customer A
     assert all(item["customer_account_id"] == str(account_a.id) for item in items)
+
+
+@pytest.mark.asyncio
+async def test_portal_overdue_filter_and_balance_sort(client, db_session, seed_users):
+    customer = seed_users["customer_a"]
+    account = seed_users["account_a"]
+    plan = seed_users["plan"]
+    sub = Subscription(
+        id=uuid.uuid4(),
+        subscription_number="SUB-PORTAL-OVERDUE",
+        customer_account_id=account.id,
+        plan_id=plan.id,
+        status=SubscriptionStatus.ACTIVE,
+        start_date=date(2000, 1, 1),
+        billing_anchor_day=1,
+        payment_terms_days=30,
+    )
+    db_session.add(sub)
+    await db_session.flush()
+
+    for number, paid_amount in (
+        ("INV-PORTAL-OPEN", Decimal("0.00")),
+        ("INV-PORTAL-PAID", Decimal("220.00")),
+    ):
+        db_session.add(
+            Invoice(
+                id=uuid.uuid4(),
+                invoice_number=number,
+                idempotency_key=number,
+                subscription_id=sub.id,
+                customer_account_id=account.id,
+                currency="USD",
+                status=InvoiceStatus.CONFIRMED if paid_amount == 0 else InvoiceStatus.PAID,
+                billing_period_start=date(2000, 1, 1),
+                billing_period_end=date(2000, 1, 31),
+                subtotal=Decimal("200.00"),
+                tax_amount=Decimal("20.00"),
+                discount_amount=Decimal("0.00"),
+                total_amount=Decimal("220.00"),
+                paid_amount=paid_amount,
+                issue_date=date(2000, 1, 1),
+                due_date=date(2000, 1, 31),
+                send_status=SendStatus.NOT_SENT,
+                customer_snapshot={"name": "Acme Corporation"},
+                billing_address_snapshot={"address": "100 Innovation Blvd"},
+            )
+        )
+    await db_session.commit()
+
+    client.cookies.clear()
+    client.cookies.update(auth_cookies(customer))
+    overdue = await client.get("/api/v1/portal/invoices?status=overdue")
+    assert overdue.status_code == 200
+    assert [item["invoice_number"] for item in overdue.json()] == ["INV-PORTAL-OPEN"]
+
+    sorted_invoices = await client.get(
+        "/api/v1/portal/invoices?sort_by=outstanding_balance&sort_order=desc"
+    )
+    assert sorted_invoices.status_code == 200
+    balances = [Decimal(str(item["outstanding_balance"])) for item in sorted_invoices.json()]
+    assert balances == sorted(balances, reverse=True)
 
 
 @pytest.mark.asyncio

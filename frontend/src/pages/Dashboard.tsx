@@ -6,7 +6,11 @@ import { PageHeader } from '../components/common/PageHeader';
 import { ErrorState } from '../components/common/ErrorState';
 import { AlertTriangle, CalendarCheck, DollarSign, TrendingUp, Users, RefreshCw } from 'lucide-react';
 
-export const Dashboard: React.FC = () => {
+interface DashboardProps {
+  onNavigate?: (tabKey: string) => void;
+}
+
+export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -67,10 +71,11 @@ export const Dashboard: React.FC = () => {
             : 'Operational queue: pending quotes, upcoming renewals, and invoice collections at a glance.'
         }
         breadcrumbs={[
-          { label: 'Brightloop' },
+          { label: 'Brightloop', tabKey: 'dashboard' },
           { label: 'Operations' },
           { label: isAdmin ? 'Finance Dashboard' : 'Operations Queue' },
         ]}
+        onSelectTab={onNavigate}
         badge={
           <span className="text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">
             {summary ? `Reporting Currency: ${summary.currency}` : 'Connecting...'}

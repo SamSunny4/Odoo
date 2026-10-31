@@ -15,7 +15,7 @@ const STATUS_OPTIONS: FilterOption[] = [
   { label: 'Paid', value: 'paid' },
   { label: 'Overdue', value: 'overdue' },
   { label: 'Draft', value: 'draft' },
-  { label: 'Canceled', value: 'canceled' },
+  { label: 'Canceled', value: 'cancelled' },
 ];
 
 const SORT_OPTIONS: SortOption[] = [
@@ -26,7 +26,11 @@ const SORT_OPTIONS: SortOption[] = [
   { label: 'Outstanding Balance', sortBy: 'outstanding_balance', sortOrder: 'desc' },
 ];
 
-export const Invoices: React.FC = () => {
+interface InvoicesProps {
+  onNavigate?: (tabKey: string) => void;
+}
+
+export const Invoices: React.FC<InvoicesProps> = ({ onNavigate }) => {
   const [invoices, setInvoices] = useState<InvoiceApiItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
@@ -135,7 +139,7 @@ export const Invoices: React.FC = () => {
   };
 
   const getStatusBadge = (status: string, isOverdue: boolean) => {
-    if (isOverdue && status !== 'paid' && status !== 'canceled') {
+    if (isOverdue && status !== 'paid' && status !== 'cancelled') {
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800">
           <AlertTriangle className="w-3 h-3" />
@@ -164,7 +168,7 @@ export const Invoices: React.FC = () => {
             Draft
           </span>
         );
-      case 'canceled':
+      case 'cancelled':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-200 text-slate-700">
             <XCircle className="w-3 h-3" />
@@ -186,10 +190,11 @@ export const Invoices: React.FC = () => {
         title="Invoices & Collections"
         subtitle="Track billing documents, payment allocations, outstanding balances, and aging collections."
         breadcrumbs={[
-          { label: 'Brightloop' },
-          { label: 'Operations' },
+          { label: 'Brightloop', tabKey: 'dashboard' },
+          { label: 'Operations', tabKey: 'dashboard' },
           { label: 'Invoices & Payments' },
         ]}
+        onSelectTab={onNavigate}
         badge={
           <span
             className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
@@ -295,7 +300,7 @@ export const Invoices: React.FC = () => {
                           {inv.due_date}
                         </td>
                         <td className="py-3.5 px-4 text-right">
-                          {inv.status !== 'paid' && inv.status !== 'canceled' && balance > 0 && (
+                          {inv.status !== 'paid' && inv.status !== 'cancelled' && balance > 0 && (
                             <button
                               onClick={() => handleOpenPayment(inv)}
                               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition"

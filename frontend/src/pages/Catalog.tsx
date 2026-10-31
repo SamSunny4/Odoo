@@ -23,7 +23,7 @@ import {
   Trash2,
   X,
   Layers,
-  Sparkles,
+  Package,
 } from 'lucide-react';
 
 const TYPE_OPTIONS: FilterOption[] = [
@@ -494,7 +494,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <Package className="w-5 h-5 text-indigo-600" />
                 <h3 className="font-bold text-slate-900 text-base">
                   {editingProduct ? 'Edit Product' : 'Add New Product'}
                 </h3>

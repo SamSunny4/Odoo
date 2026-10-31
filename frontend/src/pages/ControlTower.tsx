@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   Lock,
   RefreshCw,
-  Sparkles,
   Layers,
   AlertTriangle,
   History,
@@ -156,7 +155,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
       return;
     }
     if (selectedIds.length >= 50) {
-      setError('Interactive commits are limited to 50 invoices. Commit a smaller preview batch.');
+      setError('Manual batch generation is limited to 50 invoices at a time. Commit a smaller preview batch.');
       return;
     }
     setSelectedIds([...selectedIds, itemId]);
@@ -248,18 +247,13 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
     <div className="space-y-6">
       <PageHeader
         title="Billing Control Tower"
-        subtitle="Review idempotent invoice runs, inspect variance anomalies, and manage the exception queue."
+        subtitle="Preview upcoming recurring charges, review flagged issues before invoicing, and resolve exceptions."
         breadcrumbs={[
           { label: 'Brightloop', tabKey: 'dashboard' },
           { label: 'Operations', tabKey: 'dashboard' },
           { label: 'Control Tower' },
         ]}
         onSelectTab={onNavigate}
-        badge={
-          <span className="bg-indigo-100 text-indigo-700 text-xs px-2.5 py-0.5 rounded-full font-semibold flex items-center gap-1">
-            <Sparkles className="w-3 h-3" /> Standout Feature
-          </span>
-        }
         actions={
           <div className="flex items-center gap-2">
             {isAdmin && (
@@ -267,10 +261,10 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                 onClick={handleTriggerAutoBill}
                 disabled={autoBilling || loading || committing}
                 className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 flex items-center gap-1.5 shadow-2xs transition"
-                title="Execute automated daily billing run in background"
+                title="Run automated recurring billing in background"
               >
                 <Play className={`w-3.5 h-3.5 text-indigo-600 ${autoBilling ? 'animate-pulse' : ''}`} />
-                {autoBilling ? 'Running Scheduler…' : 'Run Auto-Bill'}
+                {autoBilling ? 'Running Scheduler…' : 'Run Scheduled Billing'}
               </button>
             )}
             <button
@@ -292,14 +286,14 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
               >
                 <CheckCircle2 className="w-4 h-4" />
                 {committing
-                  ? 'Committing…'
+                  ? 'Generating Invoices…'
                   : committed
-                  ? 'Run Committed'
-                  : `Commit Selected (${selectedIds.length})`}
+                  ? 'Invoices Generated'
+                  : `Generate Invoices (${selectedIds.length})`}
               </button>
             ) : (
               <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 px-3 py-1.5 rounded-lg text-xs font-medium">
-                <Lock className="w-3.5 h-3.5" /> Staff can preview; an admin must commit.
+                <Lock className="w-3.5 h-3.5" /> Staff can preview batches; an administrator must generate invoices.
               </div>
             )}
           </div>
@@ -326,7 +320,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
           }`}
         >
           <Layers className="w-4 h-4" />
-          Active Run & Preview
+          Batch Preview
           {items.length > 0 && (
             <span className="bg-slate-100 text-slate-700 text-xs px-2 py-0.5 rounded-full">
               {items.length}
@@ -343,7 +337,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
           }`}
         >
           <AlertTriangle className="w-4 h-4" />
-          Exception Queue
+          Issues & Exceptions
           {flaggedCount > 0 && (
             <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full font-bold">
               {flaggedCount}
@@ -376,16 +370,16 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
             </div>
             <div>
               <div className="text-xs text-slate-400 font-semibold uppercase">
-                Subscriptions Evaluated
+                Subscriptions to Bill
               </div>
               <div className="text-base font-bold text-slate-800">{items.length}</div>
             </div>
             <div>
-              <div className="text-xs text-slate-400 font-semibold uppercase">Projected Run Total</div>
+              <div className="text-xs text-slate-400 font-semibold uppercase">Projected Batch Total</div>
               <div className="text-base font-bold text-indigo-600">${totalProjected.toFixed(2)}</div>
             </div>
             <div>
-              <div className="text-xs text-slate-400 font-semibold uppercase">Flagged Exceptions</div>
+              <div className="text-xs text-slate-400 font-semibold uppercase">Flagged Items</div>
               <div
                 className={`text-base font-bold ${
                   flaggedCount ? 'text-amber-600' : 'text-emerald-600'
@@ -400,7 +394,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
               <div className="flex items-center gap-3">
-                <h2 className="font-semibold text-slate-800 text-sm">Evaluated Billing Items</h2>
+                <h2 className="font-semibold text-slate-800 text-sm">Upcoming Invoices to Review</h2>
                 <button
                   onClick={handleSelectAllClean}
                   disabled={committed || !isAdmin || cleanItems.length === 0}
@@ -409,9 +403,9 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                   {cleanItems.length > 0 && selectedIds.length === Math.min(cleanItems.length, 50) &&
                   cleanItems.slice(0, 50).every((item) => selectedIds.includes(item.id))
                     ? 'Deselect First 50'
-                    : `Select First 50 Clean (${Math.min(cleanItems.length, 50)})`}
+                    : `Select Ready Invoices (Up to 50) (${Math.min(cleanItems.length, 50)})`}
                 </button>
-                <span className="text-xs text-slate-500">Interactive commits are limited to 50 invoices.</span>
+                <span className="text-xs text-slate-500">Manual batch generation is limited to 50 invoices at a time.</span>
               </div>
               <div className="flex items-center gap-2">
                 <label htmlFor="batch-size" className="text-xs font-semibold text-slate-500">
@@ -460,10 +454,10 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                     <th className="py-3 px-4">Select</th>
                     <th className="py-3 px-4">Subscription</th>
                     <th className="py-3 px-4">Customer & Plan</th>
-                    <th className="py-3 px-4 text-right">Subtotal − Discount + Tax</th>
-                    <th className="py-3 px-4 text-right">Total Demand</th>
-                    <th className="py-3 px-4">Prior Variance</th>
-                    <th className="py-3 px-4">Status & Health</th>
+                    <th className="py-3 px-4 text-right">Subtotal & Tax</th>
+                    <th className="py-3 px-4 text-right">Invoice Amount</th>
+                    <th className="py-3 px-4">Change vs Prior Invoice</th>
+                    <th className="py-3 px-4">Review Status</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>

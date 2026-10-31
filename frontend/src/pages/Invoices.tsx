@@ -236,7 +236,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
     setPaymentModalInvoice(inv as InvoiceApiItem);
     setPaymentAmount(balance > 0 ? balance.toFixed(2) : '0.00');
     setPaymentMethod('bank_transfer');
-    setPaymentNote('Remittance recorded via staff dashboard');
+    setPaymentNote('Payment recorded via dashboard');
     setPaymentError(null);
   };
 
@@ -448,7 +448,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
     <div className="space-y-6">
       <PageHeader
         title="Invoices & Payments"
-        subtitle="Issue legal financial documents, track partial remittances, audit payment reversals, and chase overdue balances."
+        subtitle="Create invoices, record customer payments and refunds, and track overdue balances."
         badge={
           <span
             className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${
@@ -759,7 +759,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
             ) : payments.length === 0 ? (
               <EmptyState
                 title="No payments recorded"
-                description="Remittances recorded against invoices will appear here with full audit history."
+                description="Payments recorded against invoices will appear here with full history."
               />
             ) : (
               <>
@@ -1290,7 +1290,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
                 <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
                     <CreditCard className="w-4 h-4 text-emerald-600" />
-                    Payment Remittances & Reversals
+                    Payment History & Refunds
                   </span>
                   {selectedInvoice.status === 'confirmed' &&
                     Number(selectedInvoice.total_amount) > Number(selectedInvoice.paid_amount) && (
@@ -1305,7 +1305,7 @@ export const Invoices: React.FC<InvoicesProps> = () => {
 
                 {!selectedInvoice.payments || selectedInvoice.payments.length === 0 ? (
                   <div className="text-xs text-slate-500 italic p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                    No payment remittances recorded for this document yet.
+                    No payments recorded for this invoice yet.
                   </div>
                 ) : (
                   <div className="space-y-2">

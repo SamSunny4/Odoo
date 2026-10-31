@@ -33,7 +33,6 @@ import {
   History,
   X,
   ChevronRight,
-  Sparkles,
   Trash2,
 } from 'lucide-react';
 
@@ -672,7 +671,7 @@ export const Subscriptions: React.FC<SubscriptionsProps> = ({ onNavigate }) => {
                   onClick={() => handleOpenCreateModal(tpl.id)}
                   className="w-full py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1.5"
                 >
-                  <Sparkles className="w-3.5 h-3.5" />
+                  <FileText className="w-3.5 h-3.5" />
                   <span>Create Quote with this Template</span>
                 </button>
               </div>

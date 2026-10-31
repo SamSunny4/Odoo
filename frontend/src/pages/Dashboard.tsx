@@ -22,7 +22,6 @@ import {
   Download,
   Info,
   Radio,
-  Sparkles,
   ArrowRight,
   ShieldCheck,
   Receipt,
@@ -200,7 +199,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         title={isAdmin ? 'Finance & Revenue Operations' : 'Staff Operations Dashboard'}
         subtitle={
           isAdmin
-            ? 'Traceable reconciliation: recurring run rates, invoiced demands, and cash collections.'
+            ? 'Overview of recurring revenue, billed invoices, and received payments.'
             : 'Operational queue: pending quotes, upcoming renewals, and invoice collections at a glance.'
         }
         breadcrumbs={[
@@ -303,7 +302,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               financial invoices confirmed or paid within the chosen date range. Represents legally issued demand.
             </div>
             <div className="p-2.5 bg-white rounded-lg border border-indigo-100">
-              <strong className="text-slate-900">Cash Collected (Cash Receipts):</strong> Actual cash remittances
+              <strong className="text-slate-900">Cash Collected (Cash Receipts):</strong> Actual customer payments received
               received against invoices in this date window, minus any payment reversals or refunds.
             </div>
             <div className="p-2.5 bg-white rounded-lg border border-indigo-100">
@@ -393,23 +392,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         )}
       </div>
 
-      {/* Standout Billing Control Tower Teaser Banner */}
-      <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 rounded-xl p-5 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+      {/* Billing Control Tower Quick-Access */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Radio className="w-5 h-5 text-indigo-400" />
-            <span className="font-bold text-base tracking-tight">Billing Control Tower (Standout Feature)</span>
-            <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 border border-indigo-400/20">
-              <Sparkles className="w-2.5 h-2.5" /> Standout
-            </span>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
+              <Radio className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-semibold text-sm sm:text-base text-slate-900">Billing Control Tower</span>
+              <span className="ml-2 text-xs font-medium text-slate-500 hidden sm:inline">• Automated Batch Review</span>
+            </div>
           </div>
-          <p className="text-xs text-indigo-200 max-w-2xl leading-relaxed">
-            Inspect upcoming billing batches before committing demands. Automatically detects price anomalies, expired discounts, variance against prior invoices, and prevents duplicate billing.
+          <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
+            Preview upcoming subscription charges before generating invoices. Flags price changes, expired discounts, and prevents duplicate billing.
           </p>
         </div>
         <button
           onClick={() => onNavigate && onNavigate('control-tower')}
-          className="px-4 py-2.5 bg-white text-indigo-900 hover:bg-indigo-50 font-semibold text-xs sm:text-sm rounded-lg shadow-sm transition shrink-0 flex items-center gap-1.5 self-start sm:self-auto"
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm rounded-lg shadow-2xs transition shrink-0 flex items-center gap-1.5 self-start sm:self-auto"
         >
           Open Control Tower
           <ArrowRight className="w-4 h-4" />
@@ -422,7 +423,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
             <div>
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <span>Drill-Down Reconciliation Ledger</span>
+                <span>Transaction & Invoice Details</span>
                 <span className="text-xs font-mono px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 uppercase font-semibold">
                   {activeMetric.replace('_', ' ')}
                 </span>
@@ -438,7 +439,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 className="px-3 py-1.5 border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 text-xs font-semibold rounded-lg flex items-center gap-1 shadow-2xs transition"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500" />
-                {isExporting ? 'Exporting...' : 'Export Ledger CSV'}
+                {isExporting ? 'Exporting...' : 'Export Details CSV'}
               </button>
             </div>
           </div>
@@ -457,7 +458,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 }}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white"
               >
-                <option value="invoiced">Invoiced Revenue (Demands)</option>
+                <option value="invoiced">Invoiced Revenue</option>
                 <option value="collected">Cash Collections (Receipts)</option>
                 <option value="outstanding">Outstanding Balances</option>
                 <option value="overdue">Overdue Balances</option>

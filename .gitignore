@@ -1,4 +1,47 @@
-# Exact filenames
+# Brightloop Subscription Management System — .gitignore
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test & Coverage & Lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+
+# Local databases
+*.sqlite3
+*.db
+
+# Assignment brief and specifications (original reference docs)
 problem statement.txt
 Subscription_Management_System.pdf
-
+expectations.txt
+features.md
+implementationplan.md

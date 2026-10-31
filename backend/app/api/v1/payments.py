@@ -12,6 +12,8 @@ from app.schemas.invoice import RecordPaymentRequest, PaymentResponse
 from app.api.v1.deps import require_staff_or_admin, get_current_user
 from app.models.user import User
 from app.services.audit import record_audit_event
+from app.services.email_templates import payment_receipt_email
+from app.services.outbox import create_outbox_message
 
 router = APIRouter()
 
@@ -76,6 +78,31 @@ async def record_payment(
     invoice.paid_amount = Decimal(str(invoice.paid_amount)) + payload.amount
     if invoice.paid_amount >= invoice.total_amount:
         invoice.status = InvoiceStatus.PAID
+
+    recipient = (invoice.customer_snapshot or {}).get("billing_email")
+    if recipient:
+        method = payload.payment_method.value if hasattr(payload.payment_method, "value") else str(payload.payment_method)
+        balance = max(Decimal("0.00"), Decimal(str(invoice.total_amount)) - invoice.paid_amount)
+        subject, body = payment_receipt_email(
+            company_name=(invoice.customer_snapshot or {}).get("company_name", "Customer"),
+            invoice_number=invoice.invoice_number,
+            amount=payload.amount,
+            currency=invoice.currency,
+            payment_method=method,
+            payment_date=payload.payment_date,
+            balance=balance,
+        )
+        await create_outbox_message(
+            db,
+            topic="email",
+            dedupe_key=f"payment-receipt:{new_payment.id}",
+            payload={
+                "type": "payment_receipt",
+                "to": recipient,
+                "subject": subject,
+                "body": body,
+            },
+        )
 
     await db.commit()
     await db.refresh(new_payment)

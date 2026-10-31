@@ -2,11 +2,12 @@ import asyncio
 import smtplib
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from email.message import EmailMessage
 
 from celery import Celery
 from celery.schedules import crontab
-from sqlalchemy import case, create_engine, func, select, delete, update
+from sqlalchemy import case, create_engine, func, select, delete, update, or_
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
@@ -19,9 +20,16 @@ from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.plan import Plan
 from app.models.user import User, UserRole
+from app.models.customer import CustomerAccount
 from app.models.outbox import OutboxMessage, OutboxMessageStatus
 from app.services.billing import create_billing_preview, commit_billing_preview
 from app.services.audit import record_audit_event
+from app.services.email_templates import (
+    invoice_email,
+    overdue_reminder_email,
+    password_reset_email,
+    renewal_reminder_email,
+)
 
 celery_app = Celery(
     "brightloop_worker",
@@ -34,6 +42,20 @@ celery_app.conf.update(
     result_serializer="json",
     timezone=settings.ORGANIZATION_TIMEZONE,
     enable_utc=True,
+    beat_schedule={
+        "generate-recurring-invoices-daily": {
+            "task": "tasks.generate_recurring_invoices",
+            "schedule": crontab(hour=0, minute=0),
+        },
+        "check-overdue-invoices-hourly": {
+            "task": "tasks.check_overdue_invoices",
+            "schedule": crontab(minute=0),
+        },
+        "sync-outbox-messages-minute": {
+            "task": "tasks.sync_outbox_messages",
+            "schedule": crontab(minute="*"),
+        },
+    },
 )
 
 sync_engine = create_engine(settings.SYNC_DATABASE_URL, pool_pre_ping=True)
@@ -82,10 +104,13 @@ async def _close_expired_subscriptions(
         select(Subscription)
         .join(Plan, Plan.id == Subscription.plan_id)
         .where(
-            Subscription.status.in_([SubscriptionStatus.ACTIVE, SubscriptionStatus.PAUSED]),
+            Subscription.status.in_([SubscriptionStatus.CONFIRMED, SubscriptionStatus.ACTIVE, SubscriptionStatus.PAUSED]),
             Subscription.expiry_date.is_not(None),
             Subscription.expiry_date < today,
-            Plan.auto_close_on_expiry.is_(True),
+            or_(
+                Subscription.cancel_at_period_end.is_(True),
+                Plan.auto_close_on_expiry.is_(True),
+            ),
         )
         .with_for_update(skip_locked=True)
     )).scalars().all()
@@ -110,7 +135,7 @@ async def _close_expired_subscriptions(
     return len(expired)
 
 
-async def _run_due_billing() -> tuple[int, list[tuple[str, str]], int]:
+async def _run_due_billing() -> tuple[int, int, int]:
     """Create and commit a preview using the same calculation path as the admin UI."""
     async_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
@@ -135,7 +160,7 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]], int]:
                 )
             )
             if not due_count:
-                return 0, [], auto_closed_count
+                return 0, 0, auto_closed_count
             run, rows = await create_billing_preview(
                 session,
                 actor_user_id=admin.id,
@@ -153,12 +178,12 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]], int]:
                 as_of=today,
                 allow_empty=True,
             )
-            deliveries = [
-                (str(invoice.id), str(invoice.customer_snapshot.get("billing_email", "")))
+            emails_queued = sum(
+                1
                 for invoice in invoices
                 if invoice.customer_snapshot.get("billing_email")
-            ]
-            return len(invoices), deliveries, auto_closed_count
+            )
+            return len(invoices), emails_queued, auto_closed_count
     finally:
         await async_engine.dispose()
 
@@ -166,13 +191,11 @@ async def _run_due_billing() -> tuple[int, list[tuple[str, str]], int]:
 @celery_app.task(name="tasks.generate_recurring_invoices")
 def generate_recurring_invoices():
     """Automatically bill due clean subscriptions through the shared billing engine."""
-    invoices_created, deliveries, auto_closed_count = asyncio.run(_run_due_billing())
-    for invoice_id, recipient in deliveries:
-        send_invoice_email.delay(invoice_id, recipient)
+    invoices_created, emails_queued, auto_closed_count = asyncio.run(_run_due_billing())
     return {
         "status": "completed",
         "invoices_created": invoices_created,
-        "emails_queued": len(deliveries),
+        "emails_queued": emails_queued,
         "subscriptions_auto_closed": auto_closed_count,
     }
 
@@ -195,24 +218,24 @@ def check_overdue_invoices():
 def _deliver_outbox_message(msg: OutboxMessage) -> None:
     """Helper delivering a single OutboxMessage via appropriate adapter."""
     if msg.topic == "email":
-        to_email = msg.payload.get("to")
+        to_email = msg.payload.get("to") or msg.payload.get("recipient_email")
         subject = msg.payload.get("subject", "Notification from Brightloop")
         body = msg.payload.get("body")
+
+        if msg.payload.get("type") == "invoice_issued" and not body:
+            subject, body = invoice_email(
+                invoice_number=msg.payload.get("invoice_number", ""),
+                amount=msg.payload.get("total_amount", "0.00"),
+                currency=msg.payload.get("currency", ""),
+                due_date=msg.payload.get("due_date", "see customer portal"),
+            )
 
         # Handle password reset with encrypted token
         if msg.payload.get("type") == "password_reset" and "encrypted_reset_token" in msg.payload:
             raw_token = decrypt_secret(msg.payload["encrypted_reset_token"])
             frontend_base = settings.FRONTEND_URL.rstrip('/')
             reset_link = f"{frontend_base}/reset-password?token={raw_token}"
-            subject = msg.payload.get("subject", "Password Reset Request — Brightloop Software")
-            body = (
-                f"Hello,\n\n"
-                f"A password reset request was initiated for your Brightloop account.\n\n"
-                f"Use the following secure link within 1 hour to reset your password:\n"
-                f"{reset_link}\n\n"
-                f"If you did not request this, please disregard this email.\n\n"
-                f"Brightloop Security Team"
-            )
+            subject, body = password_reset_email(reset_link)
 
         if not to_email or not body:
             raise ValueError(f"Outbox email message {msg.id} missing required 'to' or 'body' field.")
@@ -225,6 +248,56 @@ def _deliver_outbox_message(msg: OutboxMessage) -> None:
 
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
             server.send_message(email_msg)
+
+
+def _enrich_invoice_email_payload(session: Session, msg: OutboxMessage) -> None:
+    if msg.payload.get("type") != "invoice_issued" or not msg.payload.get("invoice_id"):
+        return
+    invoice = session.get(Invoice, uuid.UUID(str(msg.payload["invoice_id"])))
+    if not invoice:
+        return
+    msg.payload.setdefault("invoice_number", invoice.invoice_number)
+    msg.payload.setdefault("total_amount", str(invoice.total_amount))
+    msg.payload.setdefault("due_date", invoice.due_date.isoformat())
+    msg.payload.setdefault("currency", invoice.currency)
+
+
+async def _async_enrich_invoice_email_payload(session: AsyncSession, msg: OutboxMessage) -> None:
+    if msg.payload.get("type") != "invoice_issued" or not msg.payload.get("invoice_id"):
+        return
+    invoice = await session.get(Invoice, uuid.UUID(str(msg.payload["invoice_id"])))
+    if not invoice:
+        return
+    msg.payload.setdefault("invoice_number", invoice.invoice_number)
+    msg.payload.setdefault("total_amount", str(invoice.total_amount))
+    msg.payload.setdefault("due_date", invoice.due_date.isoformat())
+    msg.payload.setdefault("currency", invoice.currency)
+
+
+def _sync_invoice_delivery_state(session: Session, msg: OutboxMessage, *, delivered: bool) -> None:
+    if msg.payload.get("type") != "invoice_issued" or not msg.payload.get("invoice_id"):
+        return
+    invoice = session.get(Invoice, uuid.UUID(str(msg.payload["invoice_id"])))
+    if not invoice:
+        return
+    if delivered:
+        invoice.send_status = SendStatus.SENT
+        invoice.sent_at = msg.sent_at or datetime.now(timezone.utc)
+    elif msg.status == OutboxMessageStatus.FAILED.value:
+        invoice.send_status = SendStatus.FAILED
+
+
+async def _async_invoice_delivery_state(session: AsyncSession, msg: OutboxMessage, *, delivered: bool) -> None:
+    if msg.payload.get("type") != "invoice_issued" or not msg.payload.get("invoice_id"):
+        return
+    invoice = await session.get(Invoice, uuid.UUID(str(msg.payload["invoice_id"])))
+    if not invoice:
+        return
+    if delivered:
+        invoice.send_status = SendStatus.SENT
+        invoice.sent_at = msg.sent_at or datetime.now(timezone.utc)
+    elif msg.status == OutboxMessageStatus.FAILED.value:
+        invoice.send_status = SendStatus.FAILED
 
 
 def _stuck_outbox_ids_query(stuck_cutoff: datetime):
@@ -370,10 +443,12 @@ async def process_outbox_messages_async(
     processed_count = 0
     for msg in messages:
         try:
+            await _async_enrich_invoice_email_payload(session, msg)
             await asyncio.to_thread(_deliver_outbox_message, msg)
             msg.status = OutboxMessageStatus.SENT.value
             msg.sent_at = datetime.now(timezone.utc)
             msg.last_error = None
+            await _async_invoice_delivery_state(session, msg, delivered=True)
             await session.commit()
             processed_count += 1
         except Exception as exc:
@@ -384,6 +459,7 @@ async def process_outbox_messages_async(
             else:
                 msg.status = OutboxMessageStatus.PENDING.value
                 msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
+            await _async_invoice_delivery_state(session, msg, delivered=False)
             await session.commit()
 
     return {"processed": processed_count, "reclaimed": reclaimed_count, "batch_size": len(messages)}
@@ -408,10 +484,12 @@ def _process_outbox_sync(session: Session, batch_size: int = 50, stuck_timeout_m
     processed_count = 0
     for msg in messages:
         try:
+            _enrich_invoice_email_payload(session, msg)
             _deliver_outbox_message(msg)
             msg.status = OutboxMessageStatus.SENT.value
             msg.sent_at = datetime.now(timezone.utc)
             msg.last_error = None
+            _sync_invoice_delivery_state(session, msg, delivered=True)
             session.commit()
             processed_count += 1
         except Exception as exc:
@@ -422,6 +500,7 @@ def _process_outbox_sync(session: Session, batch_size: int = 50, stuck_timeout_m
             else:
                 msg.status = OutboxMessageStatus.PENDING.value
                 msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
+            _sync_invoice_delivery_state(session, msg, delivered=False)
             session.commit()
 
     return {"processed": processed_count, "reclaimed": reclaimed_count, "batch_size": len(messages)}
@@ -444,12 +523,104 @@ def cleanup_outbox_messages(retention_days: int = 14):
     with Session(sync_engine) as session:
         result = session.execute(
             delete(OutboxMessage).where(
-                OutboxMessage.status.in_([OutboxMessageStatus.SENT.value, OutboxMessageStatus.FAILED.value]),
+                OutboxMessage.status == OutboxMessageStatus.SENT.value,
                 OutboxMessage.created_at < cutoff,
             )
         )
         session.commit()
         return {"purged_records": result.rowcount}
+
+
+@celery_app.task(name="tasks.queue_billing_reminders")
+def queue_billing_reminders():
+    """Queue idempotent one-week and one-day renewal reminders plus weekly overdue reminders."""
+    today = organization_today()
+    renewal_targets = {today + timedelta(days=7): 7, today + timedelta(days=1): 1}
+    queued_renewals = 0
+    queued_overdue = 0
+
+    with Session(sync_engine) as session:
+        due_subscriptions = session.execute(
+            select(Subscription, CustomerAccount, Plan)
+            .join(CustomerAccount, CustomerAccount.id == Subscription.customer_account_id)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .where(
+                Subscription.status == SubscriptionStatus.ACTIVE,
+                func.coalesce(Subscription.next_billing_date, Subscription.start_date).in_(renewal_targets),
+            )
+        ).all()
+        for subscription, account, plan in due_subscriptions:
+            billing_date = subscription.next_billing_date or subscription.start_date
+            lead_days = renewal_targets[billing_date]
+            dedupe_key = f"renewal-reminder:{subscription.id}:{billing_date.isoformat()}:{lead_days}"
+            if session.execute(select(OutboxMessage.id).where(OutboxMessage.dedupe_key == dedupe_key)).scalar_one_or_none():
+                continue
+            subject, body = renewal_reminder_email(
+                company_name=account.company_name,
+                plan_name=plan.name,
+                subscription_number=subscription.subscription_number,
+                billing_date=billing_date,
+                lead_days=lead_days,
+            )
+            session.add(OutboxMessage(
+                topic="email",
+                dedupe_key=dedupe_key,
+                payload={
+                    "type": "renewal_reminder",
+                    "to": account.billing_email,
+                    "subject": subject,
+                    "body": body,
+                },
+                status=OutboxMessageStatus.PENDING.value,
+                retry_count=0,
+                max_retries=3,
+                scheduled_at=datetime.now(timezone.utc),
+            ))
+            queued_renewals += 1
+
+        overdue_invoices = session.execute(
+            select(Invoice).where(
+                Invoice.status == InvoiceStatus.CONFIRMED,
+                Invoice.due_date < today,
+                Invoice.paid_amount < Invoice.total_amount,
+            )
+        ).scalars().all()
+        for invoice in overdue_invoices:
+            days_overdue = (today - invoice.due_date).days
+            if days_overdue != 1 and days_overdue % 7 != 0:
+                continue
+            recipient = (invoice.customer_snapshot or {}).get("billing_email")
+            if not recipient:
+                continue
+            dedupe_key = f"overdue-reminder:{invoice.id}:{today.isoformat()}"
+            if session.execute(select(OutboxMessage.id).where(OutboxMessage.dedupe_key == dedupe_key)).scalar_one_or_none():
+                continue
+            balance = max(Decimal("0.00"), Decimal(str(invoice.total_amount)) - Decimal(str(invoice.paid_amount)))
+            subject, body = overdue_reminder_email(
+                invoice_number=invoice.invoice_number,
+                due_date=invoice.due_date,
+                balance=balance,
+                currency=invoice.currency,
+            )
+            session.add(OutboxMessage(
+                topic="email",
+                dedupe_key=dedupe_key,
+                payload={
+                    "type": "overdue_reminder",
+                    "to": recipient,
+                    "subject": subject,
+                    "body": body,
+                },
+                status=OutboxMessageStatus.PENDING.value,
+                retry_count=0,
+                max_retries=3,
+                scheduled_at=datetime.now(timezone.utc),
+            ))
+            queued_overdue += 1
+
+        session.commit()
+
+    return {"renewal_reminders_queued": queued_renewals, "overdue_reminders_queued": queued_overdue}
 
 
 celery_app.conf.beat_schedule = {
@@ -464,6 +635,10 @@ celery_app.conf.beat_schedule = {
     "outbox-dispatch-every-minute": {
         "task": "tasks.process_outbox_messages",
         "schedule": 60.0,
+    },
+    "daily-billing-reminders": {
+        "task": "tasks.queue_billing_reminders",
+        "schedule": crontab(hour=9, minute=0),
     },
     "daily-outbox-cleanup": {
         "task": "tasks.cleanup_outbox_messages",

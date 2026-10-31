@@ -7,11 +7,13 @@ from app.api.v1.invoices import router as invoices_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.control_tower import router as control_tower_router
 from app.api.v1.portal import router as portal_router
+from app.api.v1.customer_portal import router as customer_portal_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.tax_rules import router as tax_router
 from app.api.v1.discount_rules import router as discount_router
 from app.api.v1.quote_templates import router as quote_templates_router
+from app.api.v1.communications import router as communications_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, prefix="", tags=["Health"])
@@ -22,8 +24,10 @@ api_router.include_router(invoices_router, prefix="/invoices", tags=["Invoices"]
 api_router.include_router(payments_router, prefix="/payments", tags=["Payments"])
 api_router.include_router(control_tower_router, prefix="/control-tower", tags=["Control Tower"])
 api_router.include_router(portal_router, prefix="/portal", tags=["Customer Portal"])
+api_router.include_router(customer_portal_router, prefix="/portal", tags=["Customer Portal"])
 api_router.include_router(reports_router, prefix="/reports", tags=["Reports"])
 api_router.include_router(admin_router, prefix="/admin", tags=["Admin"])
 api_router.include_router(tax_router, prefix="/tax-rules", tags=["Tax Rules"])
 api_router.include_router(discount_router, prefix="/discount-rules", tags=["Discount Rules"])
 api_router.include_router(quote_templates_router, prefix="/quotation-templates", tags=["Quotation Templates"])
+api_router.include_router(communications_router, prefix="/communications", tags=["Communications"])

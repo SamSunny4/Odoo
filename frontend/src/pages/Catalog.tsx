@@ -70,12 +70,14 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
     sales_price: string;
     cost_price: string;
     notes: string;
+    is_add_on: boolean;
   }>({
     name: '',
     type: 'service',
     sales_price: '',
     cost_price: '',
     notes: '',
+    is_add_on: false,
   });
   const [productSubmitting, setProductSubmitting] = useState<boolean>(false);
   const [productFormError, setProductFormError] = useState<string | null>(null);
@@ -140,6 +142,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
       sales_price: '',
       cost_price: '',
       notes: '',
+      is_add_on: false,
     });
     setProductFormError(null);
     setShowProductModal(true);
@@ -153,6 +156,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
       sales_price: String(product.sales_price),
       cost_price: product.cost_price !== null && product.cost_price !== undefined ? String(product.cost_price) : '',
       notes: product.notes || '',
+      is_add_on: product.is_add_on || false,
     });
     setProductFormError(null);
     setShowProductModal(true);
@@ -183,6 +187,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
           sales_price: productForm.sales_price,
           cost_price: productForm.cost_price,
           notes: productForm.notes.trim() || undefined,
+          is_add_on: productForm.is_add_on,
         };
         await api.updateProduct(editingProduct.id, payload);
         setFeedback({ type: 'success', message: `Product "${productForm.name}" updated successfully.` });
@@ -193,6 +198,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
           sales_price: productForm.sales_price,
           cost_price: productForm.cost_price,
           notes: productForm.notes.trim() || undefined,
+          is_add_on: productForm.is_add_on,
         };
         await api.createProduct(payload);
         setFeedback({ type: 'success', message: `Product "${productForm.name}" created successfully.` });
@@ -391,6 +397,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
                       <td className="py-3.5 px-4">
                         <div className="font-semibold text-slate-900">{p.name}</div>
                         {p.notes && <div className="text-xs text-slate-500 mt-0.5">{p.notes}</div>}
+                        {p.is_add_on && <span className="mt-1 inline-flex items-center rounded bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Customer add-on</span>}
                       </td>
                       <td className="py-3.5 px-4 capitalize">
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700">
@@ -562,6 +569,16 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
                   />
                 </div>
               </div>
+
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={productForm.is_add_on}
+                  onChange={(event) => setProductForm({ ...productForm, is_add_on: event.target.checked })}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span><strong className="block text-slate-800">Available as a customer add-on</strong><span className="mt-0.5 block text-xs text-slate-500">Customers can add or remove this product from an active subscription in the portal.</span></span>
+              </label>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Notes / Description</label>

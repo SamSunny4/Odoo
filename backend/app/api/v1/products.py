@@ -185,6 +185,7 @@ async def create_product(
         sales_price=payload.sales_price,
         cost_price=payload.cost_price,
         notes=payload.notes,
+        is_add_on=payload.is_add_on,
         is_active=payload.is_active,
     )
     db.add(product)
@@ -212,6 +213,7 @@ async def create_product(
             "type": product.type.value,
             "sales_price": str(product.sales_price),
             "cost_price": str(product.cost_price),
+            "is_add_on": product.is_add_on,
             "variants_count": len(payload.variants) if payload.variants else 0,
         },
     )
@@ -270,6 +272,10 @@ async def update_product(
     if payload.notes is not None and payload.notes != product.notes:
         changes["notes"] = {"from": product.notes, "to": payload.notes}
         product.notes = payload.notes
+
+    if payload.is_add_on is not None and payload.is_add_on != product.is_add_on:
+        changes["is_add_on"] = {"from": product.is_add_on, "to": payload.is_add_on}
+        product.is_add_on = payload.is_add_on
 
     if payload.is_active is not None and payload.is_active != product.is_active:
         changes["is_active"] = {"from": product.is_active, "to": payload.is_active}

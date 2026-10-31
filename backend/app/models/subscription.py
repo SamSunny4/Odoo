@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import (
-    String, Numeric, Integer, Date, Enum, ForeignKey, CheckConstraint
+    String, Numeric, Integer, Date, Enum, ForeignKey, CheckConstraint, Boolean, text
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -58,6 +58,7 @@ class Subscription(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     quote_valid_until: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     next_billing_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
     billing_anchor_day: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     payment_terms_days: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
 

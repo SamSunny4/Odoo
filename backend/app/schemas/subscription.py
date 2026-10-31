@@ -20,6 +20,7 @@ class SubscriptionLineResponse(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID
     product_name: Optional[str] = None
+    product_is_add_on: bool = False
     product_variant_id: Optional[uuid.UUID] = None
     variant_name: Optional[str] = None
     quantity: int
@@ -111,6 +112,11 @@ class SubscriptionResponse(BaseModel):
     expiry_date: Optional[date] = None
     quote_valid_until: Optional[date] = None
     next_billing_date: Optional[date] = None
+    cancel_at_period_end: bool = False
+    plan_cadence: Optional[str] = None
+    plan_allow_pause: bool = True
+    plan_allow_early_close: bool = True
+    plan_allow_renewal: bool = True
     billing_anchor_day: int
     payment_terms_days: int
     plan_charge: Optional[SubscriptionPlanChargeResponse] = None

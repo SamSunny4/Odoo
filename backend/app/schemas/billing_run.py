@@ -1,6 +1,6 @@
 import uuid
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.models.billing_run import BillingRunItemStatus
@@ -24,6 +24,7 @@ class ControlTowerItemResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     status: BillingRunItemStatus
     skip_reason: Optional[str] = None
+    resulting_invoice_id: Optional[uuid.UUID] = None
 
 
 class ControlTowerPreviewResponse(BaseModel):
@@ -46,3 +47,39 @@ class CommitBatchResponse(BaseModel):
     total_invoiced_amount: Decimal
     status: str
 
+
+class BillingRunSummaryResponse(BaseModel):
+    id: uuid.UUID
+    run_date: date
+    billing_period_start: date
+    billing_period_end: date
+    status: str
+    total_evaluated: int
+    total_amount_projected: Decimal
+    created_at: datetime
+    committed_at: Optional[datetime] = None
+    created_by_user_id: uuid.UUID
+    committed_by_user_id: Optional[uuid.UUID] = None
+    invoices_created_count: int = 0
+    skipped_count: int = 0
+    flagged_count: int = 0
+
+
+class SkipItemRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500, description="Reason for skipping item")
+
+
+class RetryItemResponse(BaseModel):
+    id: uuid.UUID
+    subscription_id: uuid.UUID
+    status: BillingRunItemStatus
+    warnings: List[str]
+    expected_total_amount: Decimal
+    message: str
+
+
+class AutoBillResponse(BaseModel):
+    status: str
+    invoices_created: int
+    emails_queued: int
+    subscriptions_auto_closed: int

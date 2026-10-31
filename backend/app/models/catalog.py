@@ -2,7 +2,7 @@ import enum
 import uuid
 from decimal import Decimal
 from typing import List, Optional
-from sqlalchemy import String, Text, Numeric, Boolean, Enum, ForeignKey, CheckConstraint
+from sqlalchemy import String, Text, Numeric, Boolean, Enum, ForeignKey, CheckConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
@@ -27,6 +27,7 @@ class Product(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     sales_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)  # Admin only
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_add_on: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     __table_args__ = (

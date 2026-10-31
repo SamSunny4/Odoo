@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import (
     String, Numeric, Integer, Date, DateTime, Enum, ForeignKey, Text, JSON,
     UniqueConstraint
@@ -10,6 +10,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, UUIDPrimaryKeyMixin, utc_now
+
+if TYPE_CHECKING:
+    from app.models.subscription import Subscription
 
 
 class BillingRunStatus(str, enum.Enum):
@@ -113,4 +116,4 @@ class BillingRunItem(Base, UUIDPrimaryKeyMixin):
 
     # Relationships
     billing_run: Mapped["BillingRun"] = relationship("BillingRun", back_populates="items")
-
+    subscription: Mapped["Subscription"] = relationship("Subscription")

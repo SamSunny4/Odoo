@@ -13,6 +13,7 @@ import { Login } from './pages/Login';
 import { StaffAdmin } from './pages/StaffAdmin';
 import { PlansAdmin } from './pages/PlansAdmin';
 import { DiscountsAdmin } from './pages/DiscountsAdmin';
+import { Communications } from './pages/Communications';
 import { ShieldAlert } from 'lucide-react';
 
 export const AppContent: React.FC = () => {
@@ -96,6 +97,8 @@ export const AppContent: React.FC = () => {
         return <Subscriptions onNavigate={navigateFromBreadcrumb} />;
       case 'invoices':
         return <Invoices onNavigate={navigateFromBreadcrumb} />;
+      case 'communications':
+        return <Communications onNavigate={navigateFromBreadcrumb} />;
       case 'team':
         return <StaffAdmin onNavigate={navigateFromBreadcrumb} />;
       case 'plans':

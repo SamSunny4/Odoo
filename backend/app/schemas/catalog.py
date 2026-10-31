@@ -36,6 +36,7 @@ class ProductCreate(BaseModel):
     sales_price: Decimal = Field(..., ge=Decimal("0.00"))
     cost_price: Decimal = Field(..., ge=Decimal("0.00"))
     notes: Optional[str] = None
+    is_add_on: bool = False
     is_active: bool = True
     variants: Optional[List[ProductVariantCreate]] = None
 
@@ -55,6 +56,7 @@ class ProductUpdate(BaseModel):
     sales_price: Optional[Decimal] = Field(None, ge=Decimal("0.00"))
     cost_price: Optional[Decimal] = Field(None, ge=Decimal("0.00"))
     notes: Optional[str] = None
+    is_add_on: Optional[bool] = None
     is_active: Optional[bool] = None
 
 
@@ -67,6 +69,7 @@ class ProductResponse(BaseModel):
     sales_price: Decimal
     cost_price: Optional[Decimal] = None  # None when requested by Staff/Customer
     notes: Optional[str] = None
+    is_add_on: bool = False
     is_active: bool
     variants: List[ProductVariantResponse] = []
 

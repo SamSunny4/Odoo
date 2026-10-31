@@ -11,7 +11,9 @@ import {
   Users,
   Building,
   Receipt,
+  CreditCard,
   Sparkles,
+  Mail,
 } from 'lucide-react';
 
 interface NavigationLinksProps {
@@ -59,6 +61,17 @@ export const NavigationLinks: React.FC<NavigationLinksProps> = ({
         >
           <Receipt className="w-4 h-4 text-indigo-600" />
           My Invoices
+        </button>
+        <button
+          onClick={() => handleSelect('portal-payments')}
+          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+            currentTab === 'portal-payments'
+              ? 'bg-indigo-50 text-indigo-700 font-semibold'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          }`}
+        >
+          <CreditCard className="w-4 h-4 text-indigo-600" />
+          Payment History
         </button>
         <button
           onClick={() => handleSelect('portal-profile')}
@@ -115,6 +128,17 @@ export const NavigationLinks: React.FC<NavigationLinksProps> = ({
           >
             <FileText className="w-4 h-4 text-indigo-600" />
             Invoices & Payments
+          </button>
+          <button
+            onClick={() => handleSelect('communications')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+              currentTab === 'communications'
+                ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <Mail className="w-4 h-4 text-indigo-600" />
+            Communications
           </button>
           <button
             onClick={() => handleSelect('control-tower')}

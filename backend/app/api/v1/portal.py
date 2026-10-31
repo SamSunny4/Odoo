@@ -145,6 +145,7 @@ async def get_my_subscriptions(
                 id=line.id,
                 product_id=line.product_id,
                 product_name=line.product.name if line.product else "Product",
+                product_is_add_on=bool(line.product and line.product.is_add_on),
                 product_variant_id=line.product_variant_id,
                 variant_name=line.variant.name if line.variant else None,
                 quantity=line.quantity,
@@ -172,6 +173,11 @@ async def get_my_subscriptions(
                 expiry_date=sub.expiry_date,
                 quote_valid_until=sub.quote_valid_until,
                 next_billing_date=sub.next_billing_date,
+                cancel_at_period_end=sub.cancel_at_period_end,
+                plan_cadence=sub.plan.cadence.value if sub.plan else None,
+                plan_allow_pause=sub.plan.allow_pause if sub.plan else True,
+                plan_allow_early_close=sub.plan.allow_early_close if sub.plan else True,
+                plan_allow_renewal=sub.plan.allow_renewal if sub.plan else True,
                 billing_anchor_day=sub.billing_anchor_day,
                 payment_terms_days=sub.payment_terms_days,
                 plan_charge=plan_charge,
@@ -218,7 +224,10 @@ async def get_my_invoices(
 
     query = (
         select(Invoice)
-        .where(Invoice.customer_account_id == account_id)
+        .where(
+            Invoice.customer_account_id == account_id,
+            Invoice.status != InvoiceStatus.DRAFT,
+        )
         .options(
             selectinload(Invoice.customer_account),
             selectinload(Invoice.lines),
@@ -226,7 +235,10 @@ async def get_my_invoices(
     )
     count_query = (
         select(func.count(Invoice.id))
-        .where(Invoice.customer_account_id == account_id)
+        .where(
+            Invoice.customer_account_id == account_id,
+            Invoice.status != InvoiceStatus.DRAFT,
+        )
     )
 
     filters = []

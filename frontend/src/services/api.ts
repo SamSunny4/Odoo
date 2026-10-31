@@ -44,6 +44,7 @@ export interface ProductApiItem {
   sales_price: MoneyValue;
   cost_price?: MoneyValue | null;
   notes?: string | null;
+  is_add_on?: boolean;
   is_active?: boolean;
   variants: ProductVariantApiItem[];
 }
@@ -54,6 +55,7 @@ export interface CreateProductPayload {
   sales_price: number | string;
   cost_price: number | string;
   notes?: string;
+  is_add_on?: boolean;
   is_active?: boolean;
   variants?: { name: string; price_adjustment: number | string }[];
 }
@@ -64,6 +66,7 @@ export interface UpdateProductPayload {
   sales_price?: number | string;
   cost_price?: number | string;
   notes?: string;
+  is_add_on?: boolean;
   is_active?: boolean;
 }
 
@@ -369,6 +372,12 @@ export interface SubscriptionApiItem {
   customer_name: string;
   plan_name: string;
   status: string;
+  plan_cadence?: string | null;
+  plan_allow_pause: boolean;
+  plan_allow_early_close: boolean;
+  plan_allow_renewal: boolean;
+  cancel_at_period_end: boolean;
+  plan_charge?: SubscriptionPlanCharge | null;
   subtotal_amount: MoneyValue;
   discount_amount: MoneyValue;
   tax_amount: MoneyValue;
@@ -377,12 +386,102 @@ export interface SubscriptionApiItem {
   start_date?: string | null;
   expiry_date?: string | null;
   quote_valid_until?: string | null;
-  lines: { id: string; product_name?: string | null; quantity: number; unit_price: MoneyValue }[];
+  lines: {
+    id: string;
+    product_id: string;
+    product_name?: string | null;
+    product_is_add_on?: boolean;
+    product_variant_id?: string | null;
+    variant_name?: string | null;
+    quantity: number;
+    unit_price: MoneyValue;
+    line_subtotal?: MoneyValue;
+    discount_amount?: MoneyValue;
+    tax_rate?: MoneyValue | null;
+    tax_amount?: MoneyValue;
+    line_total: MoneyValue;
+  }[];
+}
+
+export interface PortalPaymentItem {
+  id: string;
+  invoice_id: string;
+  invoice_number: string;
+  amount: MoneyValue;
+  currency: string;
+  payment_method: string;
+  payment_date: string;
+  reference_note?: string | null;
+  is_reversed: boolean;
+}
+
+export interface PortalAddonProduct {
+  id: string;
+  name: string;
+  sales_price: MoneyValue;
+  variants: { id: string; name: string; price_adjustment: MoneyValue }[];
+}
+
+export interface PortalSubscriptionActionPayload {
+  action: 'pause' | 'resume' | 'cancel' | 'renew' | 'change_addons';
+  reason?: string;
+  renewal_duration_days?: number;
+  lines?: { product_id: string; product_variant_id?: string; quantity: number }[];
+}
+
+export interface PortalSubscriptionActionResult {
+  message: string;
+  status: string;
+  effective_date?: string | null;
+  cancel_at_period_end: boolean;
+}
+
+export interface OutboxMessageItem {
+  id: string;
+  topic: string;
+  message_type?: string | null;
+  recipient?: string | null;
+  subject?: string | null;
+  status: string;
+  retry_count: number;
+  max_retries: number;
+  last_error?: string | null;
+  scheduled_at: string;
+  sent_at?: string | null;
+  created_at: string;
+}
+
+export interface InvoiceLineApiItem {
+  id: string;
+  description: string;
+  product_name_snapshot: string;
+  variant_name_snapshot?: string | null;
+  quantity: number;
+  unit_price_snapshot: MoneyValue;
+  subtotal: MoneyValue;
+  tax_rule_name_snapshot?: string | null;
+  tax_rate_snapshot?: MoneyValue;
+  tax_amount: MoneyValue;
+  discount_rule_name_snapshot?: string | null;
+  discount_amount: MoneyValue;
+  line_total: MoneyValue;
+}
+
+export interface InvoiceAuditItem {
+  id: string;
+  action: string;
+  changes: Record<string, unknown>;
+  actor_user_id?: string | null;
+  actor_name: string;
+  actor_email?: string | null;
+  actor_role?: string | null;
+  timestamp: string;
 }
 
 export interface InvoiceApiItem {
   id: string;
   invoice_number: string;
+  currency?: string;
   customer_name: string;
   billing_period_start: string;
   billing_period_end: string;
@@ -393,6 +492,43 @@ export interface InvoiceApiItem {
   issue_date?: string;
   status: string;
   is_overdue: boolean;
+  subtotal?: MoneyValue;
+  tax_amount?: MoneyValue;
+  discount_amount?: MoneyValue;
+  send_status?: string;
+  subscription_id?: string;
+}
+
+export interface InvoiceDetailApiItem extends InvoiceApiItem {
+  customer_snapshot?: Record<string, unknown>;
+  billing_address_snapshot?: Record<string, unknown>;
+  cancellation_reason?: string | null;
+  sent_at?: string | null;
+  lines: InvoiceLineApiItem[];
+  payments?: {
+    id: string;
+    amount: MoneyValue;
+    payment_method: string;
+    payment_date: string;
+    reference_note?: string;
+    is_reversed: boolean;
+  }[];
+  audit_history?: InvoiceAuditItem[];
+}
+
+export interface BillingRunSummaryApiItem {
+  id: string;
+  run_date: string;
+  billing_period_start: string;
+  billing_period_end: string;
+  status: string;
+  total_evaluated: number;
+  total_amount_projected: MoneyValue;
+  created_at: string;
+  committed_at?: string | null;
+  invoices_created_count: number;
+  skipped_count: number;
+  flagged_count: number;
 }
 
 export interface PortalProfile {
@@ -404,27 +540,32 @@ export interface PortalProfile {
   currency: string;
 }
 
+export interface ControlTowerItem {
+  id: string;
+  subscription_id?: string;
+  subscription_number: string;
+  customer_name: string;
+  plan_name: string;
+  expected_subtotal: MoneyValue;
+  expected_tax_amount: MoneyValue;
+  expected_discount_amount: MoneyValue;
+  expected_total_amount: MoneyValue;
+  prior_invoice_total?: MoneyValue | null;
+  variance_amount?: MoneyValue | null;
+  variance_reasons: string[];
+  warnings: string[];
+  status: string;
+  skip_reason?: string | null;
+  resulting_invoice_id?: string | null;
+}
+
 export interface ControlTowerPreview {
   billing_run_id: string;
   billing_period_start: string;
   billing_period_end: string;
   total_projected_amount: MoneyValue;
   flagged_count: number;
-  items: {
-    id: string;
-    subscription_number: string;
-    customer_name: string;
-    plan_name: string;
-    expected_subtotal: MoneyValue;
-    expected_tax_amount: MoneyValue;
-    expected_discount_amount: MoneyValue;
-    expected_total_amount: MoneyValue;
-    prior_invoice_total?: MoneyValue | null;
-    variance_amount?: MoneyValue | null;
-    variance_reasons: string[];
-    warnings: string[];
-    status: string;
-  }[];
+  items: ControlTowerItem[];
 }
 
 export interface DashboardSummary {
@@ -496,6 +637,15 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   return response.json();
+}
+
+async function requestBlob(endpoint: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${endpoint}`, { credentials: 'include' });
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(errorBody.detail || `HTTP Error ${response.status}`);
+  }
+  return response.blob();
 }
 
 async function requestPaginated<T>(endpoint: string, params?: QueryParams): Promise<PaginatedResult<T>> {
@@ -705,6 +855,27 @@ export const api = {
 
   // Invoices & Payments
   getInvoices: (params?: QueryParams) => requestPaginated<InvoiceApiItem>('/invoices', params),
+  getInvoice: (id: string) => request<InvoiceDetailApiItem>(`/invoices/${id}`),
+  generateDraftInvoice: (payload: {
+    subscription_id: string;
+    billing_period_start?: string;
+    billing_period_end?: string;
+    as_draft?: boolean;
+  }) =>
+    request<InvoiceDetailApiItem>('/invoices/generate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  confirmInvoice: (id: string) =>
+    request<{ message: string; status: string }>(`/invoices/${id}/confirm`, { method: 'POST' }),
+  cancelInvoice: (id: string, reason: string) =>
+    request<InvoiceDetailApiItem>(`/invoices/${id}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  sendInvoice: (id: string) =>
+    request<{ message: string; outbox_message_id: string }>(`/communications/invoices/${id}/send`, { method: 'POST' }),
+  getInvoicePdfUrl: (id: string) => `/api/v1/invoices/${id}/pdf`,
   recordPayment: (payload: {
     invoice_id: string;
     amount: number;
@@ -712,21 +883,57 @@ export const api = {
     payment_date: string;
     reference_note?: string;
   }) => request<{ id: string; invoice_id: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
+  sendQuotationEmail: (id: string) =>
+    request<{ message: string; outbox_message_id: string }>(`/communications/subscriptions/${id}/send-quote`, { method: 'POST' }),
+  sendInvoiceEmail: (id: string) =>
+    request<{ message: string; outbox_message_id: string }>(`/communications/invoices/${id}/send`, { method: 'POST' }),
+  getCommunicationsOutbox: (params?: QueryParams) => requestPaginated<OutboxMessageItem>('/communications/outbox', params),
+  retryCommunicationEmail: (id: string) =>
+    request<OutboxMessageItem>(`/communications/outbox/${id}/retry`, { method: 'POST' }),
 
   // Standout Feature: Billing Control Tower
-  getControlTowerPreview: () => request<ControlTowerPreview>('/control-tower/preview', { method: 'POST' }),
+  getControlTowerPreview: (batchSize?: number) =>
+    request<ControlTowerPreview>(`/control-tower/preview${batchSize ? `?batch_size=${batchSize}` : ''}`, { method: 'POST' }),
   commitControlTowerPreview: (runId: string, approvedItemIds: string[]) =>
     request<{ invoices_created_count: number; total_invoiced_amount: MoneyValue }>(`/control-tower/runs/${runId}/commit`, {
       method: 'POST',
       body: JSON.stringify({ approved_item_ids: approvedItemIds }),
     }),
+  getControlTowerRuns: (limit?: number) =>
+    request<BillingRunSummaryApiItem[]>(`/control-tower/runs${limit ? `?limit=${limit}` : ''}`),
+  getControlTowerRunDetail: (runId: string) =>
+    request<ControlTowerPreview>(`/control-tower/runs/${runId}`),
+  getControlTowerExceptions: () =>
+    request<ControlTowerItem[]>('/control-tower/exceptions'),
+  retryControlTowerItem: (itemId: string) =>
+    request<{ id: string; status: string; warnings: string[]; message: string }>(`/control-tower/items/${itemId}/retry`, {
+      method: 'POST',
+    }),
+  skipControlTowerItem: (itemId: string, reason: string) =>
+    request<ControlTowerItem>(`/control-tower/items/${itemId}/skip`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+  triggerAutoBill: () =>
+    request<{ status: string; invoices_created: number; emails_queued: number; subscriptions_auto_closed: number }>(
+      '/control-tower/auto-bill',
+      { method: 'POST' }
+    ),
 
   getDashboardSummary: () => request<DashboardSummary>('/reports/summary'),
 
   // Customer Portal (Derives account from session)
   getPortalSubscriptions: (params?: QueryParams) => requestPaginated<SubscriptionApiItem>('/portal/subscriptions', params),
   getPortalInvoices: (params?: QueryParams) => requestPaginated<InvoiceApiItem>('/portal/invoices', params),
+  getPortalPayments: (params?: QueryParams) => requestPaginated<PortalPaymentItem>('/portal/payments', params),
   getPortalProfile: () => request<PortalProfile>('/portal/profile'),
+  getPortalAddonCatalog: () => request<PortalAddonProduct[]>('/portal/catalog/addons'),
+  performPortalSubscriptionAction: (id: string, payload: PortalSubscriptionActionPayload) =>
+    request<PortalSubscriptionActionResult>(`/portal/subscriptions/${id}/actions`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  downloadPortalInvoicePdf: (id: string) => requestBlob(`/portal/invoices/${id}/pdf`),
 
   // Staff & Access Administration (Admin only)
   getStaff: (params?: QueryParams) => requestPaginated<StaffUserItem>('/admin/staff', params),

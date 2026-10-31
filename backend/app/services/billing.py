@@ -87,6 +87,23 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+async def generate_invoice_number(db: AsyncSession, year: int) -> str:
+    """Generate collision-free human-readable sequential invoice number (e.g. INV-2026-0001)."""
+    count_query = select(func.count(Invoice.id)).where(
+        Invoice.invoice_number.like(f"INV-{year}-%")
+    )
+    total_count = (await db.execute(count_query)).scalar_one()
+    seq = total_count + 1
+    while True:
+        candidate = f"INV-{year}-{seq:04d}"
+        exists = (await db.execute(
+            select(Invoice.id).where(Invoice.invoice_number == candidate)
+        )).scalar_one_or_none()
+        if not exists:
+            return candidate
+        seq += 1
+
+
 def calculate_subscription_charge(
     subscription: Subscription,
     *,
@@ -261,6 +278,7 @@ async def create_billing_preview(
     *,
     actor_user_id: uuid.UUID,
     as_of: date,
+    batch_limit: Optional[int] = None,
 ) -> tuple[BillingRun, list[PreviewRow]]:
     due_date_expr = func.coalesce(Subscription.next_billing_date, Subscription.start_date)
     query = (
@@ -272,6 +290,8 @@ async def create_billing_preview(
         .options(*_subscription_options())
         .order_by(due_date_expr, Subscription.subscription_number)
     )
+    if batch_limit and batch_limit > 0:
+        query = query.limit(batch_limit)
     subscriptions = (await db.execute(query)).scalars().all()
     tax_map, default_tax_rule, rules, counts = await _load_pricing_rules(db)
 
@@ -477,8 +497,9 @@ async def commit_billing_preview(
             for line in charge.lines
         ]
         account = subscription.customer_account
+        inv_num = await generate_invoice_number(db, as_of.year)
         invoice = Invoice(
-            invoice_number=f"INV-{as_of.year}-{run.id.hex.upper()}-{sequence:04d}",
+            invoice_number=inv_num,
             subscription_id=subscription.id,
             customer_account_id=subscription.customer_account_id,
             billing_run_id=run.id,
@@ -563,3 +584,204 @@ async def commit_billing_preview(
     )
     await db.commit()
     return run, created_invoices
+
+
+async def generate_invoice_for_subscription(
+    db: AsyncSession,
+    *,
+    subscription_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    as_of: date,
+    as_draft: bool = True,
+    period_start: Optional[date] = None,
+    period_end: Optional[date] = None,
+) -> Invoice:
+    """
+    Generate an invoice draft or confirmed invoice directly from a subscription.
+    Enforces idempotency, calculates taxes & discounts, freezes customer & line snapshots.
+    """
+    query = (
+        select(Subscription)
+        .where(Subscription.id == subscription_id)
+        .options(*_subscription_options())
+    )
+    subscription = (await db.execute(query)).scalar_one_or_none()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found.")
+
+    if subscription.status not in (SubscriptionStatus.ACTIVE, SubscriptionStatus.CONFIRMED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot generate invoice for subscription with status '{subscription.status.value}'. Must be active or confirmed.",
+        )
+
+    start = period_start or subscription.next_billing_date or subscription.start_date
+    cadence = subscription.plan.cadence if subscription.plan else BillingCadence.MONTHLY
+    end = period_end or billing_period_end(start, cadence, subscription.billing_anchor_day)
+
+    idempotency_key = f"sub_{subscription.id}_{start.isoformat()}_{end.isoformat()}"
+    existing = (await db.execute(
+        select(Invoice).where(Invoice.idempotency_key == idempotency_key)
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"An invoice ({existing.invoice_number}) has already been generated for subscription {subscription.subscription_number} for period {start} to {end}.",
+        )
+
+    tax_map, default_tax_rule, rules, counts = await _load_pricing_rules(db, lock_discounts=not as_draft)
+    charge = calculate_subscription_charge(
+        subscription,
+        tax_map=tax_map,
+        default_tax_rule=default_tax_rule,
+        discount_rules=rules,
+        redemption_counts=counts,
+        as_of=start,
+    )
+
+    account = subscription.customer_account
+    invoice_num = await generate_invoice_number(db, as_of.year)
+
+    invoice_lines = [
+        InvoiceLine(
+            description=line.description,
+            product_name_snapshot=line.product_name,
+            variant_name_snapshot=line.variant_name,
+            quantity=line.quantity,
+            unit_price_snapshot=line.unit_price,
+            subtotal=line.subtotal,
+            tax_rule_name_snapshot=line.tax_name,
+            tax_rate_snapshot=line.tax_rate,
+            tax_amount=line.tax_amount,
+            discount_rule_name_snapshot=charge.discount_rule.name if charge.discount_rule and line.discount else None,
+            discount_amount=line.discount,
+            line_total=line.line_total,
+        )
+        for line in charge.lines
+    ]
+
+    inv_status = InvoiceStatus.DRAFT if as_draft else InvoiceStatus.CONFIRMED
+    invoice = Invoice(
+        invoice_number=invoice_num,
+        subscription_id=subscription.id,
+        customer_account_id=subscription.customer_account_id,
+        billing_run_id=None,
+        idempotency_key=idempotency_key,
+        currency=account.currency if account else settings.ORGANIZATION_CURRENCY,
+        status=inv_status,
+        billing_period_start=start,
+        billing_period_end=end,
+        subtotal=charge.subtotal,
+        tax_amount=charge.tax,
+        discount_amount=charge.discount,
+        total_amount=charge.total,
+        paid_amount=Decimal("0.00"),
+        issue_date=as_of,
+        due_date=as_of + timedelta(days=subscription.payment_terms_days),
+        send_status=SendStatus.NOT_SENT,
+        customer_snapshot={
+            "company_name": account.company_name if account else "Customer",
+            "billing_email": account.billing_email if account else "",
+            "tax_id": account.tax_id if account else None,
+        },
+        billing_address_snapshot={
+            "address_line1": account.billing_address_line1 if account else "",
+            "address_line2": account.billing_address_line2 if account else None,
+            "city": account.billing_city if account else "",
+            "state": account.billing_state if account else None,
+            "postal_code": account.billing_postal_code if account else "",
+            "country": account.billing_country if account else "",
+        },
+        lines=invoice_lines,
+    )
+    db.add(invoice)
+    await db.flush()
+
+    if not as_draft:
+        if charge.discount_rule:
+            db.add(DiscountRedemption(
+                discount_rule_id=charge.discount_rule.id,
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+            ))
+        subscription.next_billing_date = compute_next_billing_date(start, cadence, subscription.billing_anchor_day)
+
+    await record_audit_event(
+        db,
+        entity_type="invoice",
+        entity_id=invoice.id,
+        action="CREATE_DRAFT" if as_draft else "CREATE",
+        actor_user_id=actor_user_id,
+        changes={
+            "invoice_number": invoice.invoice_number,
+            "status": invoice.status.value,
+            "total_amount": str(invoice.total_amount),
+            "subscription_id": str(subscription.id),
+        },
+    )
+    await db.commit()
+    await db.refresh(invoice, ["customer_account", "lines"])
+    return invoice
+
+
+async def recheck_preview_item(
+    db: AsyncSession,
+    *,
+    item_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+) -> BillingRunItem:
+    """
+    Re-evaluate a flagged or pending billing run item against current state.
+    Clears warnings if underlying plan/customer issues have been resolved.
+    """
+    item = (await db.execute(
+        select(BillingRunItem).where(BillingRunItem.id == item_id)
+    )).scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Billing run item not found.")
+
+    query = (
+        select(Subscription)
+        .where(Subscription.id == item.subscription_id)
+        .options(*_subscription_options())
+    )
+    subscription = (await db.execute(query)).scalar_one_or_none()
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found.")
+
+    tax_map, default_tax_rule, rules, counts = await _load_pricing_rules(db)
+    charge = calculate_subscription_charge(
+        subscription,
+        tax_map=tax_map,
+        default_tax_rule=default_tax_rule,
+        discount_rules=rules,
+        redemption_counts=counts,
+        as_of=item.billing_period_start,
+    )
+    if subscription.customer_account and not subscription.customer_account.tax_id and tax_map:
+        charge.warnings.append("Customer tax ID is missing.")
+
+    item.expected_subtotal = charge.subtotal
+    item.expected_tax_amount = charge.tax
+    item.expected_discount_amount = charge.discount
+    item.expected_total_amount = charge.total
+    item.warnings = charge.warnings
+    item.status = BillingRunItemStatus.FLAGGED if charge.warnings else BillingRunItemStatus.PENDING
+    if not charge.warnings and item.skip_reason:
+        item.skip_reason = None
+
+    await record_audit_event(
+        db,
+        entity_type="billing_run_item",
+        entity_id=item.id,
+        action="RECHECK",
+        actor_user_id=actor_user_id,
+        changes={
+            "status": item.status.value,
+            "warnings_count": len(item.warnings),
+            "expected_total_amount": str(item.expected_total_amount),
+        },
+    )
+    await db.commit()
+    await db.refresh(item)
+    return item

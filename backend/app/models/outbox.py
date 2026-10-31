@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, DateTime, Integer, Text, JSON
+from sqlalchemy import String, DateTime, Integer, Text, JSON, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,7 @@ class OutboxMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "outbox_messages"
 
     topic: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    dedupe_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(
         String(20),
@@ -43,5 +44,9 @@ class OutboxMessage(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+    __table_args__ = (
+        Index("uq_outbox_messages_dedupe_key", "dedupe_key", unique=True),
     )
 

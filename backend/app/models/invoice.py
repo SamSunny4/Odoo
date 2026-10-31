@@ -10,6 +10,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
+from app.core.clock import organization_today
 
 if TYPE_CHECKING:
     from app.models.customer import CustomerAccount
@@ -129,7 +130,7 @@ class Invoice(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         """Derived dynamically from due date and balance."""
         return (
             self.status == InvoiceStatus.CONFIRMED
-            and date.today() > self.due_date
+            and organization_today() > self.due_date
             and self.outstanding_balance > Decimal("0.00")
         )
 

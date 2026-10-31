@@ -3,21 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import engine
-from app.models.base import Base
 from app.api.v1.router import api_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application lifecycle manager:
-    Ensures database tables are created if running without prior migrations in dev.
-    """
-    # Create tables if needed in development
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Release database connections on application shutdown."""
     yield
-    # Cleanup connection pool
     await engine.dispose()
 
 

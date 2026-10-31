@@ -3,8 +3,7 @@ import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 from sqlalchemy import select
-from app.core.database import engine, AsyncSessionLocal
-from app.models.base import Base
+from app.core.database import AsyncSessionLocal
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.models.customer import CustomerAccount, CustomerAccountMembership, CustomerMembershipRole
@@ -17,11 +16,7 @@ from app.models.invoice import Invoice, InvoiceLine, InvoiceStatus, SendStatus
 
 
 async def seed_data():
-    """Idempotent seed script provisioning initial admin, catalog, and test records."""
-    print("[Init] Initializing Brightloop database schema...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+    """Idempotently seed demo records into a migrated database."""
     async with AsyncSessionLocal() as session:
         print("[Seed] Checking existing seeded users...")
 

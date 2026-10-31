@@ -37,6 +37,22 @@ services:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
 
+  db-init:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: brightloop-db-init
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed"]
+    restart: "no"
+    volumes:
+      - ./backend:/app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/brightloop_subscriptions
+      - SYNC_DATABASE_URL=postgresql://postgres:postgres@db:5432/brightloop_subscriptions
+    depends_on:
+      db:
+        condition: service_healthy
+
   backend:
     build:
       context: ./backend
@@ -53,9 +69,12 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SMTP_HOST=mailpit
       - SMTP_PORT=1025
+      - FRONTEND_URL=http://localhost:5173
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       redis:
         condition: service_started
 
@@ -77,6 +96,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       redis:
         condition: service_started
 
@@ -96,6 +117,8 @@ services:
     depends_on:
       redis:
         condition: service_started
+      db-init:
+        condition: service_completed_successfully
 
   frontend:
     build:

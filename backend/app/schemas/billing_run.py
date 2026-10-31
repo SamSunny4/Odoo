@@ -1,7 +1,8 @@
 import uuid
 from decimal import Decimal
+from datetime import date
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.models.billing_run import BillingRunItemStatus
 
 
@@ -9,6 +10,8 @@ class ControlTowerItemResponse(BaseModel):
     id: uuid.UUID
     subscription_id: uuid.UUID
     subscription_number: str
+    billing_period_start: date
+    billing_period_end: date
     customer_name: str
     plan_name: str
     expected_subtotal: Decimal
@@ -17,19 +20,24 @@ class ControlTowerItemResponse(BaseModel):
     expected_total_amount: Decimal
     prior_invoice_total: Optional[Decimal] = None
     variance_amount: Optional[Decimal] = None
-    variance_reasons: List[str] = []
-    warnings: List[str] = []
+    variance_reasons: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
     status: BillingRunItemStatus
     skip_reason: Optional[str] = None
 
 
 class ControlTowerPreviewResponse(BaseModel):
-    billing_period_start: str
-    billing_period_end: str
+    billing_run_id: uuid.UUID
+    billing_period_start: date
+    billing_period_end: date
     total_subscriptions: int
     total_projected_amount: Decimal
     flagged_count: int
-    items: List[ControlTowerItemResponse] = []
+    items: List[ControlTowerItemResponse] = Field(default_factory=list)
+
+
+class CommitBatchRequest(BaseModel):
+    approved_item_ids: List[uuid.UUID] = Field(min_length=1)
 
 
 class CommitBatchResponse(BaseModel):

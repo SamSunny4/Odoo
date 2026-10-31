@@ -14,27 +14,12 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   login: (email: string, pass: string) => Promise<void>;
-  signup: (data: any) => Promise<void>;
+  signup: (data: Record<string, unknown>) => Promise<void>;
   logout: () => void;
   switchRole: (role: UserRole) => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
 }
-
-const SEEDED_CREDENTIALS: Record<UserRole, { email: string; pass: string }> = {
-  admin: {
-    email: 'admin@brightloop.local',
-    pass: 'Admin@12345!',
-  },
-  staff: {
-    email: 'staff@brightloop.local',
-    pass: 'Staff@12345!',
-  },
-  customer: {
-    email: 'customer@acme.com',
-    pass: 'Customer@12345!',
-  },
-};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -91,24 +76,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         companyName: meData.customer_account?.company_name,
       });
       setIsAuthenticated(true);
+    } catch (error) {
+      localStorage.removeItem('brightloop_jwt_token');
+      setCurrentUser(null);
+      setIsAuthenticated(false);
+      throw error;
     } finally {
       setIsLoading(false);
     }
   };
 
-  const signup = async (data: any) => {
+  const signup = async (data: Record<string, unknown>) => {
     setIsLoading(true);
     try {
-      const resp = await fetch('http://localhost:8000/api/v1/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (!resp.ok) {
-        const err = await resp.json();
-        throw new Error(err.detail || 'Signup failed');
-      }
-      const tokenData = await resp.json();
+      const tokenData = await api.signup(data);
       localStorage.setItem('brightloop_jwt_token', tokenData.access_token);
       await restoreSession();
     } finally {
@@ -123,18 +104,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchRole = async (role: UserRole) => {
-    const cred = SEEDED_CREDENTIALS[role];
     try {
-      await login(cred.email, cred.pass);
-    } catch {
-      // Fallback for offline dev
-      setCurrentUser({
-        id: '00000000-0000-0000-0000-000000000000',
-        email: cred.email,
-        fullName: `${role.toUpperCase()} User`,
-        role,
-      });
-      setIsAuthenticated(true);
+      await login(
+        role === 'admin' ? 'admin@brightloop.local' : role === 'staff' ? 'staff@brightloop.local' : 'customer@acme.com',
+        role === 'admin' ? 'Admin@12345!' : role === 'staff' ? 'Staff@12345!' : 'Customer@12345!',
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to sign in with that demo account.';
+      window.alert(message);
     }
   };
 

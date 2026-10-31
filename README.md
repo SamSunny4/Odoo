@@ -61,11 +61,9 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Initialize database schema and seed baseline records
-python -m app.seed
-
-# (Optional) For versioned schema tracking with Alembic:
+# Apply database migrations, then seed baseline records
 alembic upgrade head
+python -m app.seed
 
 # Start FastAPI server
 uvicorn app.main:app --reload --port 8000
@@ -99,6 +97,8 @@ docker compose up -d --build
 ## 4. Architectural Documents
 
 - **Domain Model & ER Specifications**: [docs/architecture.md](docs/architecture.md)
+- **Implementation Plan**: [implementationplan.md](implementationplan.md)
+- **Feature Set**: [features.md](features.md)
 - **Contribution & Git Guidelines**: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
@@ -107,11 +107,11 @@ docker compose up -d --build
 
 ```bash
 # Run backend test suite
-cd backend
-pytest -v
+cd backend && pytest -v
+```
 
+```bash
 # Run frontend typecheck and production bundle build
-cd frontend
-npm run build
+cd frontend && npm run build
 ```
 

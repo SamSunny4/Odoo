@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Lock, Mail } from 'lucide-react';
+import { api } from '../services/api';
 
 export const Login: React.FC = () => {
   const { login, signup } = useAuth();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -14,6 +15,7 @@ export const Login: React.FC = () => {
   const [postalCode, setPostalCode] = useState('');
   const [country, setCountry] = useState('US');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -22,8 +24,8 @@ export const Login: React.FC = () => {
     setLoading(true);
     try {
       await login(email, password);
-    } catch (err: any) {
-      setError(err.message || 'Login failed. Please verify credentials.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed. Please verify credentials.');
     } finally {
       setLoading(false);
     }
@@ -44,8 +46,23 @@ export const Login: React.FC = () => {
         billing_postal_code: postalCode,
         billing_country: country,
       });
-    } catch (err: any) {
-      setError(err.message || 'Registration failed. Check password requirements.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed. Check password requirements.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+    setLoading(true);
+    try {
+      const result = await api.forgotPassword(email);
+      setNotice(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not request a password reset.');
     } finally {
       setLoading(false);
     }
@@ -73,7 +90,7 @@ export const Login: React.FC = () => {
           {/* Mode Switch Tabs */}
           <div className="flex border-b border-slate-200 mb-6">
             <button
-              onClick={() => { setMode('login'); setError(null); }}
+              onClick={() => { setMode('login'); setError(null); setNotice(null); }}
               className={`flex-1 py-2 text-center text-sm font-semibold border-b-2 transition ${
                 mode === 'login'
                   ? 'border-indigo-600 text-indigo-600'
@@ -83,7 +100,7 @@ export const Login: React.FC = () => {
               Sign In
             </button>
             <button
-              onClick={() => { setMode('signup'); setError(null); }}
+              onClick={() => { setMode('signup'); setError(null); setNotice(null); }}
               className={`flex-1 py-2 text-center text-sm font-semibold border-b-2 transition ${
                 mode === 'signup'
                   ? 'border-indigo-600 text-indigo-600'
@@ -99,8 +116,37 @@ export const Login: React.FC = () => {
               {error}
             </div>
           )}
+          {notice && (
+            <div className="mb-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg p-3">
+              {notice}
+            </div>
+          )}
 
-          {mode === 'login' ? (
+          {mode === 'forgot' ? (
+            <form onSubmit={handleForgotSubmit} className="space-y-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Reset your password</h3>
+                <p className="text-sm text-slate-500 mt-1">Enter your account email and we’ll send a secure reset link if it’s registered.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@company.com"
+                  className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                />
+              </div>
+              <button type="submit" disabled={loading} className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60">
+                {loading ? 'Sending…' : 'Send reset link'}
+              </button>
+              <button type="button" onClick={() => { setMode('login'); setNotice(null); setError(null); }} className="w-full text-sm text-indigo-600 hover:text-indigo-800">
+                Back to sign in
+              </button>
+            </form>
+          ) : mode === 'login' ? (
             <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase">Email Address</label>
@@ -142,6 +188,9 @@ export const Login: React.FC = () => {
                 className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-xs text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 transition"
               >
                 {loading ? 'Authenticating...' : 'Sign In to Dashboard'}
+              </button>
+              <button type="button" onClick={() => { setMode('forgot'); setError(null); setNotice(null); }} className="w-full text-sm text-indigo-600 hover:text-indigo-800">
+                Forgot password?
               </button>
             </form>
           ) : (
@@ -257,7 +306,7 @@ export const Login: React.FC = () => {
           )}
 
           {/* Seeded Account Quick-Fill Helper */}
-          <div className="mt-6 pt-5 border-t border-slate-200">
+          {mode !== 'forgot' && <div className="mt-6 pt-5 border-t border-slate-200">
             <span className="text-xs text-slate-400 block font-medium mb-2">Test with Seeded Accounts:</span>
             <div className="grid grid-cols-3 gap-2 text-xs">
               <button
@@ -285,7 +334,7 @@ export const Login: React.FC = () => {
                 <div className="text-[10px] text-slate-400">customer@...</div>
               </button>
             </div>
-          </div>
+          </div>}
         </div>
       </div>
     </div>

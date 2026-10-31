@@ -1,23 +1,28 @@
+import asyncio
 import smtplib
-from datetime import date, timedelta
+import uuid
 from email.message import EmailMessage
+
 from celery import Celery
 from celery.schedules import crontab
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.models.subscription import Subscription, SubscriptionStatus
+from app.core.clock import organization_today
+from app.models.billing_run import BillingRunItemStatus
 from app.models.invoice import Invoice, InvoiceStatus, SendStatus
-from app.models.customer import CustomerAccount
+from app.models.subscription import Subscription, SubscriptionStatus
+from app.models.user import User, UserRole
+from app.services.billing import create_billing_preview, commit_billing_preview
 
-# Initialize Celery app with Redis broker and result backend
 celery_app = Celery(
     "brightloop_worker",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
 )
-
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -26,141 +31,113 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
-# Synchronous engine for background Celery worker tasks
 sync_engine = create_engine(settings.SYNC_DATABASE_URL, pool_pre_ping=True)
 
 
 @celery_app.task(name="tasks.send_invoice_email", bind=True, max_retries=3)
 def send_invoice_email(self, invoice_id: str, recipient_email: str):
-    """
-    Background email delivery:
-    Connects to SMTP host (Mailpit in local/dev) and sends customer invoice notification.
-    """
+    """Send a committed invoice notice and retain delivery status for retry."""
     with Session(sync_engine) as session:
-        inv = session.get(Invoice, invoice_id)
-        if not inv:
-            print(f"[Worker] Invoice {invoice_id} not found for email dispatch.")
+        invoice = session.get(Invoice, uuid.UUID(invoice_id))
+        if not invoice:
             return {"status": "not_found"}
 
-        msg = EmailMessage()
-        msg["Subject"] = f"Invoice {inv.invoice_number} from Brightloop Software"
-        msg["From"] = settings.SMTP_FROM
-        msg["To"] = recipient_email
-
-        body = f"""Dear Customer,
-
-Your recurring subscription invoice {inv.invoice_number} for period {inv.billing_period_start} - {inv.billing_period_end} is ready.
-
-Total Amount: ${inv.total_amount:.2f} {inv.currency}
-Due Date: {inv.due_date}
-
-You can view and manage your account anytime on your customer portal.
-
-Thank you,
-Brightloop Software Operations Team
-"""
-        msg.set_content(body)
+        message = EmailMessage()
+        message["Subject"] = f"Invoice {invoice.invoice_number} from Brightloop Software"
+        message["From"] = settings.SMTP_FROM
+        message["To"] = recipient_email
+        message.set_content(
+            f"Your invoice {invoice.invoice_number} for "
+            f"{invoice.billing_period_start} through {invoice.billing_period_end} is ready.\n\n"
+            f"Amount: {invoice.total_amount} {invoice.currency}\n"
+            f"Due date: {invoice.due_date}\n\n"
+            "Sign in to the Brightloop customer portal to view your invoice."
+        )
 
         try:
             with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                server.send_message(msg)
-            inv.send_status = SendStatus.SENT
+                server.send_message(message)
+            invoice.send_status = SendStatus.SENT
             session.commit()
-            print(f"[Worker] Successfully delivered invoice {inv.invoice_number} to {recipient_email} via SMTP.")
-            return {"status": "sent", "invoice_number": inv.invoice_number}
+            return {"status": "sent", "invoice_number": invoice.invoice_number}
         except Exception as exc:
-            print(f"[Worker] SMTP delivery to {recipient_email} failed: {exc}")
-            inv.send_status = SendStatus.FAILED
+            invoice.send_status = SendStatus.FAILED
             session.commit()
-            # Retry with exponential backoff if Celery is running
             raise self.retry(exc=exc, countdown=60)
+
+
+async def _run_due_billing() -> tuple[int, list[tuple[str, str]]]:
+    """Create and commit a preview using the same calculation path as the admin UI."""
+    async_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            admin = (await session.execute(
+                select(User).where(User.role == UserRole.ADMIN, User.is_active.is_(True)).limit(1)
+            )).scalar_one_or_none()
+            if not admin:
+                raise RuntimeError("Recurring billing requires an active seeded admin account.")
+
+            today = organization_today()
+            due_count = await session.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.status == SubscriptionStatus.ACTIVE,
+                    func.coalesce(Subscription.next_billing_date, Subscription.start_date) <= today,
+                )
+            )
+            if not due_count:
+                return 0, []
+            run, rows = await create_billing_preview(
+                session,
+                actor_user_id=admin.id,
+                as_of=today,
+            )
+            clean_item_ids = [
+                row.item.id for row in rows
+                if row.item.status == BillingRunItemStatus.PENDING
+            ]
+            _, invoices = await commit_billing_preview(
+                session,
+                billing_run_id=run.id,
+                approved_item_ids=clean_item_ids,
+                actor_user_id=admin.id,
+                as_of=today,
+                allow_empty=True,
+            )
+            deliveries = [
+                (str(invoice.id), str(invoice.customer_snapshot.get("billing_email", "")))
+                for invoice in invoices
+                if invoice.customer_snapshot.get("billing_email")
+            ]
+            return len(invoices), deliveries
+    finally:
+        await async_engine.dispose()
 
 
 @celery_app.task(name="tasks.generate_recurring_invoices")
 def generate_recurring_invoices():
-    """
-    Automated recurring billing job:
-    Discovers all active subscriptions due today, creates invoices, and queues email dispatch.
-    """
-    today = date.today()
-    print(f"[Worker] Executing scheduled recurring billing run for {today}...")
-
-    with Session(sync_engine) as session:
-        query = (
-            select(Subscription)
-            .where(
-                Subscription.status == SubscriptionStatus.ACTIVE,
-                Subscription.next_billing_date <= today,
-            )
-        )
-        due_subs = session.execute(query).scalars().all()
-        invoices_created = 0
-
-        for sub in due_subs:
-            # Check idempotency
-            idempotency_key = f"sub_{sub.id}_{today.isoformat()}"
-            existing = session.execute(
-                select(Invoice).where(Invoice.idempotency_key == idempotency_key)
-            ).scalar_one_or_none()
-
-            if existing:
-                continue
-
-            inv_number = f"INV-{today.year}-{str(invoices_created + 200).zfill(5)}"
-            invoice = Invoice(
-                invoice_number=inv_number,
-                subscription_id=sub.id,
-                customer_account_id=sub.customer_account_id,
-                idempotency_key=idempotency_key,
-                currency="USD",
-                status=InvoiceStatus.CONFIRMED,
-                billing_period_start=today.replace(day=1),
-                billing_period_end=today,
-                subtotal=sub.plan.base_price if sub.plan else 100,
-                tax_amount=0,
-                discount_amount=0,
-                total_amount=sub.plan.base_price if sub.plan else 100,
-                paid_amount=0,
-                issue_date=today,
-                due_date=today + timedelta(days=sub.payment_terms_days),
-                send_status=SendStatus.NOT_SENT,
-                customer_snapshot={"name": "Customer"},
-                billing_address_snapshot={"address": "Standard"},
-            )
-            session.add(invoice)
-            session.flush()
-
-            # Advance billing date
-            sub.next_billing_date = today + timedelta(days=30)
-            invoices_created += 1
-
-            # Dispatch email task asynchronously
-            if sub.customer_account and sub.customer_account.billing_email:
-                send_invoice_email.delay(str(invoice.id), sub.customer_account.billing_email)
-
-        session.commit()
-        print(f"[Worker] Completed automated run: {invoices_created} invoices generated.")
-        return {"status": "completed", "invoices_created": invoices_created}
+    """Automatically bill due clean subscriptions through the shared billing engine."""
+    invoices_created, deliveries = asyncio.run(_run_due_billing())
+    for invoice_id, recipient in deliveries:
+        send_invoice_email.delay(invoice_id, recipient)
+    return {"status": "completed", "invoices_created": invoices_created, "emails_queued": len(deliveries)}
 
 
 @celery_app.task(name="tasks.check_overdue_invoices")
 def check_overdue_invoices():
-    """
-    Scheduled job: identifies overdue invoices and logs collection alerts.
-    """
-    today = date.today()
+    """Count unpaid, overdue invoices for the operations queue."""
+    today = organization_today()
     with Session(sync_engine) as session:
-        query = select(Invoice).where(
-            Invoice.status == InvoiceStatus.CONFIRMED,
-            Invoice.due_date < today,
-            Invoice.paid_amount < Invoice.total_amount,
-        )
-        overdue_invoices = session.execute(query).scalars().all()
-        print(f"[Worker] Overdue check complete: {len(overdue_invoices)} overdue invoices identified.")
-        return {"overdue_count": len(overdue_invoices)}
+        overdue = session.execute(
+            select(Invoice.id).where(
+                Invoice.status == InvoiceStatus.CONFIRMED,
+                Invoice.due_date < today,
+                Invoice.paid_amount < Invoice.total_amount,
+            )
+        ).all()
+        return {"overdue_count": len(overdue)}
 
 
-# Periodic Celery Beat Schedule
 celery_app.conf.beat_schedule = {
     "daily-recurring-billing-run": {
         "task": "tasks.generate_recurring_invoices",

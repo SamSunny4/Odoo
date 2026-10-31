@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
+import type { MoneyValue } from '../services/api';
 import { Plus, CheckCircle, Clock, Pause, RefreshCw } from 'lucide-react';
 
 interface SubItem {
@@ -8,37 +9,28 @@ interface SubItem {
   customer_name: string;
   plan_name: string;
   status: string;
-  total_amount: number;
-  next_billing_date?: string;
-  lines: any[];
+  total_amount: MoneyValue;
+  next_billing_date?: string | null;
+  lines: unknown[];
 }
 
 export const Subscriptions: React.FC = () => {
   const [subscriptions, setSubscriptions] = useState<SubItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchSubscriptions = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await api.getSubscriptions();
       setSubscriptions(data);
       setIsLive(true);
-    } catch {
-      // Fallback
-      setSubscriptions([
-        {
-          id: '1',
-          subscription_number: 'SUB-2026-0001',
-          customer_name: 'Acme Corporation',
-          plan_name: 'Standard Business Monthly',
-          status: 'active',
-          total_amount: 905.00,
-          next_billing_date: '2026-11-01',
-          lines: [],
-        },
-      ]);
+    } catch (reason) {
+      setSubscriptions([]);
       setIsLive(false);
+      setError(reason instanceof Error ? reason.message : 'Could not load subscriptions.');
     } finally {
       setLoading(false);
     }
@@ -52,8 +44,8 @@ export const Subscriptions: React.FC = () => {
     try {
       await api.pauseSubscription(id);
       await fetchSubscriptions();
-    } catch (e: any) {
-      alert(e.message);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not pause the subscription.');
     }
   };
 
@@ -61,8 +53,8 @@ export const Subscriptions: React.FC = () => {
     try {
       await api.resumeSubscription(id);
       await fetchSubscriptions();
-    } catch (e: any) {
-      alert(e.message);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not resume the subscription.');
     }
   };
 
@@ -109,7 +101,7 @@ export const Subscriptions: React.FC = () => {
                 isLive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
               }`}
             >
-              {isLive ? '● Live API Data' : 'Cached Baseline'}
+              {isLive ? '● Live API Data' : 'No live data'}
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
@@ -130,6 +122,8 @@ export const Subscriptions: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {error && <div role="alert" className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">{error}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <table className="w-full text-left border-collapse text-sm">
@@ -176,6 +170,8 @@ export const Subscriptions: React.FC = () => {
                 </td>
               </tr>
             ))}
+            {!loading && subscriptions.length === 0 && <tr><td colSpan={7} className="p-8 text-center text-slate-500">No subscriptions to display.</td></tr>}
+            {loading && <tr><td colSpan={7} className="p-8 text-center text-slate-500">Loading subscriptions…</td></tr>}
           </tbody>
         </table>
       </div>

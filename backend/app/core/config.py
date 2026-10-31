@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     SMTP_HOST: str = "localhost"
     SMTP_PORT: int = 1025
     SMTP_FROM: str = "billing@brightloop.local"
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # CORS
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"

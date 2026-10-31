@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import type { MoneyValue } from '../services/api';
 import { Lock, Plus, Tag, RefreshCw } from 'lucide-react';
 
 interface ProductItem {
   id: string;
   name: string;
   type: string;
-  sales_price: number;
-  cost_price?: number | null;
-  notes?: string;
-  variants: { name: string; price_adjustment: number }[];
+  sales_price: MoneyValue;
+  cost_price?: MoneyValue | null;
+  notes?: string | null;
+  variants: { name: string; price_adjustment: MoneyValue }[];
 }
 
 export const Catalog: React.FC = () => {
@@ -19,36 +20,19 @@ export const Catalog: React.FC = () => {
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchProducts = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await api.getProducts();
       setProducts(data);
       setIsLive(true);
-    } catch {
-      // Fallback
-      setProducts([
-        {
-          id: '1',
-          name: 'Brightloop Core ERP',
-          type: 'service',
-          sales_price: 100.0,
-          cost_price: isAdmin ? 30.0 : null,
-          variants: [{ name: 'Brand: Odoo', price_adjustment: 560.0 }],
-          notes: 'Core ERP subscription module.',
-        },
-        {
-          id: '2',
-          name: 'Advanced Analytics Add-on',
-          type: 'service',
-          sales_price: 45.0,
-          cost_price: isAdmin ? 10.0 : null,
-          variants: [],
-          notes: 'Real-time financial KPI dashboard.',
-        },
-      ]);
+    } catch (reason) {
+      setProducts([]);
       setIsLive(false);
+      setError(reason instanceof Error ? reason.message : 'Could not load products.');
     } finally {
       setLoading(false);
     }
@@ -69,7 +53,7 @@ export const Catalog: React.FC = () => {
                 isLive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
               }`}
             >
-              {isLive ? '● Live API Data' : 'Cached Baseline'}
+              {isLive ? '● Live API Data' : 'No live data'}
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
@@ -95,6 +79,8 @@ export const Catalog: React.FC = () => {
           )}
         </div>
       </div>
+
+      {error && <div role="alert" className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">{error}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <table className="w-full text-left border-collapse text-sm">
@@ -151,6 +137,8 @@ export const Catalog: React.FC = () => {
                 </td>
               </tr>
             ))}
+            {!loading && products.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-500">No products to display.</td></tr>}
+            {loading && <tr><td colSpan={5} className="p-8 text-center text-slate-500">Loading products…</td></tr>}
           </tbody>
         </table>
       </div>

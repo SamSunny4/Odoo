@@ -1,60 +1,37 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import type { InvoiceApiItem, PortalProfile, SubscriptionApiItem } from '../services/api';
 import { CheckCircle2, Download, RefreshCw } from 'lucide-react';
 
 export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = 'portal-subscriptions' }) => {
   const { user } = useAuth();
-  const [subscriptions, setSubscriptions] = useState<any[]>([]);
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [profile, setProfile] = useState<any>(null);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionApiItem[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceApiItem[]>([]);
+  const [profile, setProfile] = useState<PortalProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchPortalData = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [subs, invs, prof] = await Promise.all([
         api.getPortalSubscriptions(),
         api.getPortalInvoices(),
-        api.getPortalProfile().catch(() => null),
+        api.getPortalProfile(),
       ]);
       setSubscriptions(subs);
       setInvoices(invs);
       setProfile(prof);
       setIsLive(true);
-    } catch {
-      // Fallback
-      setSubscriptions([
-        {
-          id: '1',
-          subscription_number: 'SUB-2026-0001',
-          plan_name: 'Standard Business Monthly',
-          status: 'active',
-          total_amount: 905.00,
-          next_billing_date: '2026-11-01',
-          lines: [],
-        },
-      ]);
-      setInvoices([
-        {
-          id: '1',
-          invoice_number: 'INV-2026-0001',
-          billing_period_start: '2026-10-01',
-          billing_period_end: '2026-10-31',
-          total_amount: 995.50,
-          status: 'paid',
-        },
-      ]);
-      setProfile({
-        company_name: user?.companyName || 'Acme Corporation',
-        billing_email: user?.email || '',
-        phone: '+1 (555) 234-5678',
-        tax_id: 'US-TAX-987654321',
-        billing_address: '100 Innovation Blvd, Austin, TX 78701, US',
-        currency: 'USD',
-      });
+    } catch (reason) {
+      setSubscriptions([]);
+      setInvoices([]);
+      setProfile(null);
       setIsLive(false);
+      setError(reason instanceof Error ? reason.message : 'Could not load your account data.');
     } finally {
       setLoading(false);
     }
@@ -74,13 +51,13 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900">{profile?.company_name || user?.companyName || 'Acme Corporation'}</h1>
+              <h1 className="text-xl font-bold text-slate-900">{profile?.company_name || user?.companyName || 'Customer account'}</h1>
               <span
                 className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
                   isLive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
                 }`}
               >
-                {isLive ? '● Live Account Data' : 'Cached Baseline'}
+                {isLive ? '● Live Account Data' : 'No live data'}
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -96,15 +73,15 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
-            Account in Good Standing
-          </span>
         </div>
       </div>
+
+      {error && <div role="alert" className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">{error}</div>}
 
       {activeTab === 'portal-subscriptions' && (
         <div className="space-y-4">
           <h2 className="text-lg font-bold text-slate-900">Your Active Subscriptions</h2>
+          {!loading && subscriptions.length === 0 && <div className="bg-white rounded-xl border border-slate-200 p-6 text-sm text-slate-500">No subscriptions to display.</div>}
           {subscriptions.map((sub) => (
             <div
               key={sub.id}
@@ -175,6 +152,8 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
                     </td>
                   </tr>
                 ))}
+                {!loading && invoices.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-500">No invoices to display.</td></tr>}
+                {loading && <tr><td colSpan={5} className="p-8 text-center text-slate-500">Loading invoices…</td></tr>}
               </tbody>
             </table>
           </div>
@@ -195,11 +174,11 @@ export const CustomerPortal: React.FC<{ activeTab?: string }> = ({ activeTab = '
             </div>
             <div className="col-span-2">
               <label className="text-xs font-semibold text-slate-400 uppercase">Billing Address</label>
-              <div className="font-medium text-slate-800">{profile.billing_address}</div>
+              <div className="font-medium text-slate-800">{profile.billing_address || 'No billing address on file'}</div>
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-400 uppercase">Billing Currency</label>
-              <div className="font-medium text-slate-800">{profile.currency} ($)</div>
+              <div className="font-medium text-slate-800">{profile.currency}</div>
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-400 uppercase">Registered Email</label>

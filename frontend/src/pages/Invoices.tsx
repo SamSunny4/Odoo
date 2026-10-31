@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
+import type { MoneyValue } from '../services/api';
 import { CheckCircle2, Clock, AlertTriangle, CreditCard, Printer, RefreshCw } from 'lucide-react';
 
 interface InvoiceItem {
@@ -8,8 +9,8 @@ interface InvoiceItem {
   customer_name: string;
   billing_period_start: string;
   billing_period_end: string;
-  total_amount: number;
-  paid_amount: number;
+  total_amount: MoneyValue;
+  paid_amount: MoneyValue;
   due_date: string;
   status: string;
   is_overdue: boolean;
@@ -19,29 +20,19 @@ export const Invoices: React.FC = () => {
   const [invoices, setInvoices] = useState<InvoiceItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [isLive, setIsLive] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchInvoices = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await api.getInvoices();
       setInvoices(data);
       setIsLive(true);
-    } catch {
-      setInvoices([
-        {
-          id: '1',
-          invoice_number: 'INV-2026-0001',
-          customer_name: 'Acme Corporation',
-          billing_period_start: '2026-10-01',
-          billing_period_end: '2026-10-31',
-          total_amount: 995.50,
-          paid_amount: 995.50,
-          due_date: '2026-10-15',
-          status: 'paid',
-          is_overdue: false,
-        },
-      ]);
+    } catch (reason) {
+      setInvoices([]);
       setIsLive(false);
+      setError(reason instanceof Error ? reason.message : 'Could not load invoices.');
     } finally {
       setLoading(false);
     }
@@ -70,8 +61,8 @@ export const Invoices: React.FC = () => {
       });
       alert('Payment recorded successfully.');
       await fetchInvoices();
-    } catch (e: any) {
-      alert(e.message);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not record the payment.');
     }
   };
 
@@ -86,7 +77,7 @@ export const Invoices: React.FC = () => {
                 isLive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
               }`}
             >
-              {isLive ? '● Live API Data' : 'Cached Baseline'}
+              {isLive ? '● Live API Data' : 'No live data'}
             </span>
           </div>
           <p className="text-sm text-slate-500 mt-1">
@@ -101,6 +92,8 @@ export const Invoices: React.FC = () => {
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
+
+      {error && <div role="alert" className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">{error}</div>}
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <table className="w-full text-left border-collapse text-sm">
@@ -178,6 +171,8 @@ export const Invoices: React.FC = () => {
                 </tr>
               );
             })}
+            {!loading && invoices.length === 0 && <tr><td colSpan={8} className="p-8 text-center text-slate-500">No invoices to display.</td></tr>}
+            {loading && <tr><td colSpan={8} className="p-8 text-center text-slate-500">Loading invoices…</td></tr>}
           </tbody>
         </table>
       </div>

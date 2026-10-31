@@ -412,3 +412,4 @@ def downgrade() -> None:
     op.drop_table('customer_accounts')
     op.drop_table('password_reset_tokens')
     op.drop_table('users')
+

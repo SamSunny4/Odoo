@@ -85,6 +85,8 @@ class BillingRunItem(Base, UUIDPrimaryKeyMixin):
         nullable=False,
         index=True,
     )
+    billing_period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    billing_period_end: Mapped[date] = mapped_column(Date, nullable=False)
     expected_subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     expected_tax_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
     expected_discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)

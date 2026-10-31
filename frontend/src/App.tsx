@@ -11,6 +11,8 @@ import { Invoices } from './pages/Invoices';
 import { CustomerPortal } from './pages/CustomerPortal';
 import { Login } from './pages/Login';
 import { StaffAdmin } from './pages/StaffAdmin';
+import { PlansAdmin } from './pages/PlansAdmin';
+import { DiscountsAdmin } from './pages/DiscountsAdmin';
 import { ShieldAlert } from 'lucide-react';
 
 export const AppContent: React.FC = () => {
@@ -97,15 +99,9 @@ export const AppContent: React.FC = () => {
       case 'team':
         return <StaffAdmin onNavigate={navigateFromBreadcrumb} />;
       case 'plans':
+        return <PlansAdmin onNavigate={navigateFromBreadcrumb} />;
       case 'discounts':
-        return (
-          <div className="bg-white rounded-xl border border-slate-200 p-8 text-center space-y-3 max-w-xl mx-auto mt-8 shadow-xs">
-            <h2 className="text-xl font-bold text-slate-800 capitalize">{currentTab} Administration</h2>
-            <p className="text-sm text-slate-500 max-w-md mx-auto">
-              This module is scheduled for implementation in Phase 3. The underlying domain models ({currentTab}) have been fully scaffolded.
-            </p>
-          </div>
-        );
+        return <DiscountsAdmin onNavigate={navigateFromBreadcrumb} />;
       default:
         return <Dashboard />;
     }

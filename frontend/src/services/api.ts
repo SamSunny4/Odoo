@@ -30,6 +30,13 @@ export interface AuthProfile {
   customer_account?: { company_name: string } | null;
 }
 
+export interface ProductVariantApiItem {
+  id: string;
+  name: string;
+  price_adjustment: MoneyValue;
+  is_active: boolean;
+}
+
 export interface ProductApiItem {
   id: string;
   name: string;
@@ -37,7 +44,27 @@ export interface ProductApiItem {
   sales_price: MoneyValue;
   cost_price?: MoneyValue | null;
   notes?: string | null;
-  variants: { id?: string; name: string; price_adjustment: MoneyValue }[];
+  is_active?: boolean;
+  variants: ProductVariantApiItem[];
+}
+
+export interface CreateProductPayload {
+  name: string;
+  type: string;
+  sales_price: number | string;
+  cost_price: number | string;
+  notes?: string;
+  is_active?: boolean;
+  variants?: { name: string; price_adjustment: number | string }[];
+}
+
+export interface UpdateProductPayload {
+  name?: string;
+  type?: string;
+  sales_price?: number | string;
+  cost_price?: number | string;
+  notes?: string;
+  is_active?: boolean;
 }
 
 export interface PlanApiItem {
@@ -46,6 +73,144 @@ export interface PlanApiItem {
   cadence: string;
   base_price: MoneyValue;
   min_quantity: number;
+  available_from?: string | null;
+  available_to?: string | null;
+  auto_close_on_expiry: boolean;
+  allow_early_close: boolean;
+  allow_pause: boolean;
+  allow_renewal: boolean;
+  is_active: boolean;
+}
+
+export interface CreatePlanPayload {
+  name: string;
+  cadence: string;
+  base_price: number | string;
+  min_quantity: number;
+  available_from?: string;
+  available_to?: string;
+  auto_close_on_expiry?: boolean;
+  allow_early_close?: boolean;
+  allow_pause?: boolean;
+  allow_renewal?: boolean;
+  is_active?: boolean;
+}
+
+export interface UpdatePlanPayload {
+  name?: string;
+  cadence?: string;
+  base_price?: number | string;
+  min_quantity?: number;
+  available_from?: string;
+  available_to?: string;
+  auto_close_on_expiry?: boolean;
+  allow_early_close?: boolean;
+  allow_pause?: boolean;
+  allow_renewal?: boolean;
+  is_active?: boolean;
+}
+
+export interface TaxRuleApiItem {
+  id: string;
+  name: string;
+  rate_percentage: MoneyValue;
+  is_active: boolean;
+  created_at?: string;
+}
+
+export interface CreateTaxRulePayload {
+  name: string;
+  rate_percentage: number | string;
+  is_active?: boolean;
+}
+
+export interface UpdateTaxRulePayload {
+  name?: string;
+  rate_percentage?: number | string;
+  is_active?: boolean;
+}
+
+export interface DiscountRuleApiItem {
+  id: string;
+  name: string;
+  discount_type: 'percentage' | 'fixed';
+  value: MoneyValue;
+  scope: 'subscription' | 'product';
+  target_product_id?: string | null;
+  target_product_name?: string | null;
+  min_spend: MoneyValue;
+  min_quantity: number;
+  max_usage_limit?: number | null;
+  current_usage_count: number;
+  valid_from: string;
+  valid_to: string;
+  is_active: boolean;
+  created_at?: string;
+}
+
+export interface CreateDiscountRulePayload {
+  name: string;
+  discount_type: 'percentage' | 'fixed';
+  value: number | string;
+  scope?: 'subscription' | 'product';
+  target_product_id?: string;
+  min_spend?: number | string;
+  min_quantity?: number;
+  max_usage_limit?: number;
+  valid_from: string;
+  valid_to: string;
+  is_active?: boolean;
+}
+
+export interface UpdateDiscountRulePayload {
+  name?: string;
+  discount_type?: 'percentage' | 'fixed';
+  value?: number | string;
+  scope?: 'subscription' | 'product';
+  target_product_id?: string;
+  min_spend?: number | string;
+  min_quantity?: number;
+  max_usage_limit?: number;
+  valid_from?: string;
+  valid_to?: string;
+  is_active?: boolean;
+}
+
+export interface CalculatePreviewPayload {
+  plan_id?: string;
+  product_lines: {
+    product_id: string;
+    variant_id?: string;
+    quantity: number;
+    tax_rule_id?: string;
+  }[];
+  discount_rule_id?: string;
+  default_tax_rule_id?: string;
+  as_of?: string;
+}
+
+export interface CalculatePreviewResult {
+  plan_name?: string | null;
+  plan_base_price: MoneyValue;
+  lines: {
+    description: string;
+    product_name: string;
+    variant_name?: string | null;
+    price_adjustment: MoneyValue;
+    unit_price: MoneyValue;
+    quantity: number;
+    subtotal: MoneyValue;
+    discount_amount: MoneyValue;
+    tax_rate: MoneyValue;
+    tax_amount: MoneyValue;
+    line_total: MoneyValue;
+  }[];
+  subtotal: MoneyValue;
+  discount_amount: MoneyValue;
+  discount_name?: string | null;
+  tax_amount: MoneyValue;
+  total_amount: MoneyValue;
+  warnings: string[];
 }
 
 export interface SubscriptionApiItem {
@@ -138,6 +303,7 @@ export interface QueryParams {
   type?: string;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  envelope?: boolean;
 }
 
 function buildQuery(params?: QueryParams): string {
@@ -151,7 +317,9 @@ function buildQuery(params?: QueryParams): string {
   if (params.type && params.type.trim()) searchParams.set('type', params.type.trim());
   if (params.sortBy) searchParams.set('sort_by', params.sortBy);
   if (params.sortOrder) searchParams.set('sort_order', params.sortOrder);
-  searchParams.set('envelope', 'true');
+  if (params.envelope !== false) {
+    searchParams.set('envelope', 'true');
+  }
   const qs = searchParams.toString();
   return qs ? `?${qs}` : '';
 }
@@ -228,9 +396,103 @@ export const api = {
       body: JSON.stringify({ token, new_password }),
     }),
 
-  // Catalog
+  // Catalog Products & Variants
   getProducts: (params?: QueryParams) => requestPaginated<ProductApiItem>('/products', params),
+  getAllProducts: () => request<ProductApiItem[]>('/products?envelope=false'),
+  createProduct: (payload: CreateProductPayload) =>
+    request<ProductApiItem>('/products', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProduct: (id: string, payload: UpdateProductPayload) =>
+    request<ProductApiItem>(`/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archiveProduct: (id: string) =>
+    request<{ message: string; is_active: boolean }>(`/products/${id}`, {
+      method: 'DELETE',
+    }),
+  getProductVariants: (productId: string) =>
+    request<ProductVariantApiItem[]>(`/products/${productId}/variants`),
+  createProductVariant: (productId: string, payload: { name: string; price_adjustment: number | string }) =>
+    request<ProductVariantApiItem>(`/products/${productId}/variants`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProductVariant: (
+    productId: string,
+    variantId: string,
+    payload: { name?: string; price_adjustment?: number | string; is_active?: boolean }
+  ) =>
+    request<ProductVariantApiItem>(`/products/${productId}/variants/${variantId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archiveProductVariant: (productId: string, variantId: string) =>
+    request<{ message: string; is_active: boolean }>(`/products/${productId}/variants/${variantId}`, {
+      method: 'DELETE',
+    }),
+
+  // Plans Management
   getPlans: () => request<PlanApiItem[]>('/plans'),
+  createPlan: (payload: CreatePlanPayload) =>
+    request<PlanApiItem>('/plans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updatePlan: (id: string, payload: UpdatePlanPayload) =>
+    request<PlanApiItem>(`/plans/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archivePlan: (id: string) =>
+    request<{ message: string; is_active: boolean }>(`/plans/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Tax Rules
+  getTaxRules: (params?: QueryParams) => requestPaginated<TaxRuleApiItem>('/tax-rules', params),
+  getAllTaxRules: () => request<TaxRuleApiItem[]>('/tax-rules?envelope=false'),
+  createTaxRule: (payload: CreateTaxRulePayload) =>
+    request<TaxRuleApiItem>('/tax-rules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateTaxRule: (id: string, payload: UpdateTaxRulePayload) =>
+    request<TaxRuleApiItem>(`/tax-rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archiveTaxRule: (id: string) =>
+    request<{ message: string; is_active: boolean }>(`/tax-rules/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Discount Rules
+  getDiscountRules: (params?: QueryParams) => requestPaginated<DiscountRuleApiItem>('/discount-rules', params),
+  getAllDiscountRules: () => request<DiscountRuleApiItem[]>('/discount-rules?envelope=false'),
+  createDiscountRule: (payload: CreateDiscountRulePayload) =>
+    request<DiscountRuleApiItem>('/discount-rules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateDiscountRule: (id: string, payload: UpdateDiscountRulePayload) =>
+    request<DiscountRuleApiItem>(`/discount-rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  archiveDiscountRule: (id: string) =>
+    request<{ message: string; is_active: boolean }>(`/discount-rules/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Quote Simulator / Price Calculation Preview
+  calculatePreview: (payload: CalculatePreviewPayload) =>
+    request<CalculatePreviewResult>('/catalog/calculate-preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // Subscriptions
   getSubscriptions: (params?: QueryParams) => requestPaginated<SubscriptionApiItem>('/subscriptions', params),

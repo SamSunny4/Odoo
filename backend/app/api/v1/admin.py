@@ -1,36 +1,110 @@
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, func
+from typing import List, Optional, Union
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
 from app.schemas.auth import CreateStaffRequest, UpdateStaffRequest, UserResponse
+from app.schemas.pagination import PaginatedResponse
 from app.api.v1.deps import require_admin
 from app.services.audit import record_audit_event
 
 router = APIRouter()
 
 
-@router.get("/staff", response_model=List[UserResponse], tags=["Admin"])
+@router.get(
+    "/staff",
+    response_model=Union[PaginatedResponse[UserResponse], List[UserResponse]],
+    tags=["Admin"],
+)
 async def list_staff_members(
+    response: Response,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(10, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search term for name or email"),
+    role: Optional[str] = Query(None, description="Filter by role: admin or staff"),
+    sort_by: Optional[str] = Query("created_at", description="Sort by: created_at, full_name, email"),
+    sort_order: Optional[str] = Query("desc", description="Sort direction: asc or desc"),
+    envelope: bool = Query(False, description="Return wrapped object with pagination metadata"),
 ):
     """
-    List all staff and admin accounts for the organization.
+    List staff and admin accounts with server-side search, filtering, sorting, and pagination.
     Strictly restricted to Admin role.
+    Emits pagination headers (X-Total-Count, X-Page, X-Page-Size, X-Total-Pages).
     """
     query = (
         select(User)
         .where(User.role.in_([UserRole.ADMIN, UserRole.STAFF]))
-        .order_by(User.created_at.desc())
     )
+    count_query = (
+        select(func.count(User.id))
+        .where(User.role.in_([UserRole.ADMIN, UserRole.STAFF]))
+    )
+
+    filters = []
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        filters.append(
+            or_(
+                User.email.ilike(term),
+                User.full_name.ilike(term),
+            )
+        )
+
+    if role and role.strip():
+        try:
+            role_enum = UserRole(role.strip().lower())
+            if role_enum in [UserRole.ADMIN, UserRole.STAFF]:
+                filters.append(User.role == role_enum)
+        except ValueError:
+            pass
+
+    if filters:
+        query = query.where(*filters)
+        count_query = count_query.where(*filters)
+
+    total_count = (await db.execute(count_query)).scalar_one()
+
+    # Sorting
+    sort_col = User.created_at
+    if sort_by == "full_name":
+        sort_col = User.full_name
+    elif sort_by == "email":
+        sort_col = User.email
+
+    if sort_order and sort_order.lower() == "asc":
+        query = query.order_by(sort_col.asc().nulls_last())
+    else:
+        query = query.order_by(sort_col.desc().nulls_last())
+
+    query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     users = result.scalars().all()
-    return [UserResponse.model_validate(u) for u in users]
+
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["X-Page"] = str(page)
+    response.headers["X-Page-Size"] = str(page_size)
+    response.headers["X-Total-Pages"] = str(total_pages)
+
+    items = [UserResponse.model_validate(u) for u in users]
+
+    if envelope:
+        return PaginatedResponse[UserResponse](
+            items=items,
+            total=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
+
+    return items
 
 
 @router.post("/staff", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Admin"])

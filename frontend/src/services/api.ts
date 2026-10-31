@@ -37,7 +37,7 @@ export interface ProductApiItem {
   sales_price: MoneyValue;
   cost_price?: MoneyValue | null;
   notes?: string | null;
-  variants: { id: string; name: string; price_adjustment: MoneyValue }[];
+  variants: { id?: string; name: string; price_adjustment: MoneyValue }[];
 }
 
 export interface PlanApiItem {
@@ -56,6 +56,8 @@ export interface SubscriptionApiItem {
   status: string;
   total_amount: MoneyValue;
   next_billing_date?: string | null;
+  start_date?: string | null;
+  expiry_date?: string | null;
   lines: { id: string; product_name?: string | null; quantity: number; unit_price: MoneyValue }[];
 }
 
@@ -67,7 +69,9 @@ export interface InvoiceApiItem {
   billing_period_end: string;
   total_amount: MoneyValue;
   paid_amount: MoneyValue;
+  outstanding_balance?: MoneyValue;
   due_date: string;
+  issue_date?: string;
   status: string;
   is_overdue: boolean;
 }
@@ -117,6 +121,41 @@ export interface DashboardSummary {
   renewals_due_7d_count: number;
 }
 
+export interface PaginatedResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export interface QueryParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: string;
+  role?: string;
+  type?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+function buildQuery(params?: QueryParams): string {
+  if (!params) return '';
+  const searchParams = new URLSearchParams();
+  if (params.page !== undefined) searchParams.set('page', String(params.page));
+  if (params.pageSize !== undefined) searchParams.set('page_size', String(params.pageSize));
+  if (params.search && params.search.trim()) searchParams.set('search', params.search.trim());
+  if (params.status && params.status.trim()) searchParams.set('status', params.status.trim());
+  if (params.role && params.role.trim()) searchParams.set('role', params.role.trim());
+  if (params.type && params.type.trim()) searchParams.set('type', params.type.trim());
+  if (params.sortBy) searchParams.set('sort_by', params.sortBy);
+  if (params.sortOrder) searchParams.set('sort_order', params.sortOrder);
+  searchParams.set('envelope', 'true');
+  const qs = searchParams.toString();
+  return qs ? `?${qs}` : '';
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const headers = {
     'Content-Type': 'application/json',
@@ -135,6 +174,25 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   return response.json();
+}
+
+async function requestPaginated<T>(endpoint: string, params?: QueryParams): Promise<PaginatedResult<T>> {
+  const qs = buildQuery(params);
+  const data = await request<{
+    items: T[];
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+  }>(`${endpoint}${qs}`);
+
+  return {
+    items: data.items || [],
+    total: data.total ?? (data.items?.length || 0),
+    page: data.page ?? 1,
+    pageSize: data.page_size ?? (params?.pageSize || 10),
+    totalPages: data.total_pages ?? 1,
+  };
 }
 
 export const api = {
@@ -171,18 +229,18 @@ export const api = {
     }),
 
   // Catalog
-  getProducts: () => request<ProductApiItem[]>('/products'),
+  getProducts: (params?: QueryParams) => requestPaginated<ProductApiItem>('/products', params),
   getPlans: () => request<PlanApiItem[]>('/plans'),
 
   // Subscriptions
-  getSubscriptions: () => request<SubscriptionApiItem[]>('/subscriptions'),
+  getSubscriptions: (params?: QueryParams) => requestPaginated<SubscriptionApiItem>('/subscriptions', params),
   pauseSubscription: (id: string) =>
     request<{ message: string; status: string }>(`/subscriptions/${id}/pause`, { method: 'POST' }),
   resumeSubscription: (id: string) =>
     request<{ message: string; status: string }>(`/subscriptions/${id}/resume`, { method: 'POST' }),
 
   // Invoices & Payments
-  getInvoices: () => request<InvoiceApiItem[]>('/invoices'),
+  getInvoices: (params?: QueryParams) => requestPaginated<InvoiceApiItem>('/invoices', params),
   recordPayment: (payload: {
     invoice_id: string;
     amount: number;
@@ -202,12 +260,12 @@ export const api = {
   getDashboardSummary: () => request<DashboardSummary>('/reports/summary'),
 
   // Customer Portal (Derives account from session)
-  getPortalSubscriptions: () => request<SubscriptionApiItem[]>('/portal/subscriptions'),
-  getPortalInvoices: () => request<InvoiceApiItem[]>('/portal/invoices'),
+  getPortalSubscriptions: (params?: QueryParams) => requestPaginated<SubscriptionApiItem>('/portal/subscriptions', params),
+  getPortalInvoices: (params?: QueryParams) => requestPaginated<InvoiceApiItem>('/portal/invoices', params),
   getPortalProfile: () => request<PortalProfile>('/portal/profile'),
 
   // Staff & Access Administration (Admin only)
-  getStaff: () => request<StaffUserItem[]>('/admin/staff'),
+  getStaff: (params?: QueryParams) => requestPaginated<StaffUserItem>('/admin/staff', params),
   createStaff: (payload: CreateStaffPayload) =>
     request<StaffUserItem>('/admin/staff', {
       method: 'POST',

@@ -89,6 +89,11 @@ def _money(value: Decimal) -> Decimal:
 
 async def generate_invoice_number(db: AsyncSession, year: int) -> str:
     """Generate collision-free human-readable sequential invoice number (e.g. INV-2026-0001)."""
+    # Serialize number allocation on PostgreSQL. The unique column remains the
+    # final guard, while the transaction lock prevents concurrent count+1 races.
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        await db.execute(select(func.pg_advisory_xact_lock(734821906)))
     count_query = select(func.count(Invoice.id)).where(
         Invoice.invoice_number.like(f"INV-{year}-%")
     )
@@ -279,6 +284,7 @@ async def create_billing_preview(
     actor_user_id: uuid.UUID,
     as_of: date,
     batch_limit: Optional[int] = None,
+    subscription_ids: Optional[list[uuid.UUID]] = None,
 ) -> tuple[BillingRun, list[PreviewRow]]:
     due_date_expr = func.coalesce(Subscription.next_billing_date, Subscription.start_date)
     query = (
@@ -290,6 +296,8 @@ async def create_billing_preview(
         .options(*_subscription_options())
         .order_by(due_date_expr, Subscription.subscription_number)
     )
+    if subscription_ids is not None:
+        query = query.where(Subscription.id.in_(subscription_ids))
     if batch_limit and batch_limit > 0:
         query = query.limit(batch_limit)
     subscriptions = (await db.execute(query)).scalars().all()
@@ -377,7 +385,7 @@ async def create_billing_preview(
     return run, rows
 
 
-async def commit_billing_preview(
+async def _commit_billing_preview_impl(
     db: AsyncSession,
     *,
     billing_run_id: uuid.UUID,
@@ -394,8 +402,9 @@ async def commit_billing_preview(
     )).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Billing preview not found.")
-    if run.status != BillingRunStatus.PREVIEW:
-        raise HTTPException(status_code=409, detail="This billing preview has already been committed.")
+    if run.status not in (BillingRunStatus.PREVIEW, BillingRunStatus.COMMITTED, BillingRunStatus.FAILED):
+        raise HTTPException(status_code=409, detail="This billing run cannot be committed in its current state.")
+    previous_status = run.status
 
     all_items = (await db.execute(
         select(BillingRunItem)
@@ -413,16 +422,20 @@ async def commit_billing_preview(
         raise HTTPException(status_code=400, detail="Flagged or previously processed items cannot be committed.")
 
     for item in all_items:
-        if item.status == BillingRunItemStatus.PENDING and item.id not in selected_ids:
+        if (
+            previous_status == BillingRunStatus.PREVIEW
+            and item.status == BillingRunItemStatus.PENDING
+            and item.id not in selected_ids
+        ):
             item.status = BillingRunItemStatus.SKIPPED
             item.skip_reason = "Not selected for this billing commit."
 
     if not selected_items:
-        run.status = BillingRunStatus.COMMITTED
-        run.committed_by_user_id = actor_user_id
-        run.committed_at = datetime.now(timezone.utc)
-        run.total_amount_projected = Decimal("0.00")
-        await db.commit()
+        if previous_status == BillingRunStatus.PREVIEW:
+            run.status = BillingRunStatus.COMMITTED
+            run.committed_by_user_id = actor_user_id
+            run.committed_at = datetime.now(timezone.utc)
+            await db.commit()
         return run, []
 
     subscription_ids = [item.subscription_id for item in selected_items]
@@ -557,6 +570,7 @@ async def commit_billing_preview(
             changes={"invoice_number": invoice.invoice_number, "total_amount": str(invoice.total_amount)},
         )
         if account and account.billing_email:
+            invoice.send_status = SendStatus.QUEUED
             await create_outbox_message(
                 db,
                 topic="email",
@@ -570,10 +584,10 @@ async def commit_billing_preview(
                 },
             )
 
-    run.status = BillingRunStatus.COMMITTED
+    has_failed_items = any(item.status == BillingRunItemStatus.FAILED for item in all_items)
+    run.status = BillingRunStatus.FAILED if has_failed_items else BillingRunStatus.COMMITTED
     run.committed_by_user_id = actor_user_id
     run.committed_at = datetime.now(timezone.utc)
-    run.total_amount_projected = total_committed
     await record_audit_event(
         db,
         entity_type="billing_run",
@@ -584,6 +598,61 @@ async def commit_billing_preview(
     )
     await db.commit()
     return run, created_invoices
+
+
+async def commit_billing_preview(
+    db: AsyncSession,
+    *,
+    billing_run_id: uuid.UUID,
+    approved_item_ids: list[uuid.UUID],
+    actor_user_id: uuid.UUID,
+    as_of: date,
+    allow_empty: bool = False,
+) -> tuple[BillingRun, list[Invoice]]:
+    """Commit a billing batch and persist unexpected per-item failures for retry."""
+    try:
+        return await _commit_billing_preview_impl(
+            db,
+            billing_run_id=billing_run_id,
+            approved_item_ids=approved_item_ids,
+            actor_user_id=actor_user_id,
+            as_of=as_of,
+            allow_empty=allow_empty,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await db.rollback()
+        run = (await db.execute(
+            select(BillingRun).where(BillingRun.id == billing_run_id).with_for_update()
+        )).scalar_one_or_none()
+        if not run:
+            raise
+
+        selected_items = (await db.execute(
+            select(BillingRunItem)
+            .where(
+                BillingRunItem.billing_run_id == billing_run_id,
+                BillingRunItem.id.in_(approved_item_ids),
+            )
+            .with_for_update()
+        )).scalars().all()
+        failure_reason = f"Billing attempt failed ({type(exc).__name__}): {str(exc)[:400]}"
+        for item in selected_items:
+            if item.status in (BillingRunItemStatus.PENDING, BillingRunItemStatus.FAILED):
+                item.status = BillingRunItemStatus.FAILED
+                item.warnings = list(item.warnings or []) + [failure_reason]
+        run.status = BillingRunStatus.FAILED
+        await record_audit_event(
+            db,
+            entity_type="billing_run",
+            entity_id=run.id,
+            action="COMMIT_FAILED",
+            actor_user_id=actor_user_id,
+            changes={"failed_item_count": len(selected_items), "reason": failure_reason},
+        )
+        await db.commit()
+        return run, []
 
 
 async def generate_invoice_for_subscription(
@@ -604,6 +673,7 @@ async def generate_invoice_for_subscription(
         select(Subscription)
         .where(Subscription.id == subscription_id)
         .options(*_subscription_options())
+        .with_for_update()
     )
     subscription = (await db.execute(query)).scalar_one_or_none()
     if not subscription:
@@ -618,6 +688,16 @@ async def generate_invoice_for_subscription(
     start = period_start or subscription.next_billing_date or subscription.start_date
     cadence = subscription.plan.cadence if subscription.plan else BillingCadence.MONTHLY
     end = period_end or billing_period_end(start, cadence, subscription.billing_anchor_day)
+    current_due = subscription.next_billing_date or subscription.start_date
+    if end < start:
+        raise HTTPException(status_code=422, detail="Billing period end must be on or after its start date.")
+    if start > current_due:
+        raise HTTPException(
+            status_code=409,
+            detail="A later billing period cannot be invoiced while an earlier period is still due.",
+        )
+    if end != billing_period_end(start, cadence, subscription.billing_anchor_day):
+        raise HTTPException(status_code=422, detail="Billing period dates do not match the subscription cadence.")
 
     idempotency_key = f"sub_{subscription.id}_{start.isoformat()}_{end.isoformat()}"
     existing = (await db.execute(
@@ -628,6 +708,16 @@ async def generate_invoice_for_subscription(
             status_code=409,
             detail=f"An invoice ({existing.invoice_number}) has already been generated for subscription {subscription.subscription_number} for period {start} to {end}.",
         )
+
+    overlapping = (await db.execute(
+        select(Invoice.id).where(
+            Invoice.subscription_id == subscription.id,
+            Invoice.billing_period_start <= end,
+            Invoice.billing_period_end >= start,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if overlapping:
+        raise HTTPException(status_code=409, detail="An invoice already exists for an overlapping billing period.")
 
     tax_map, default_tax_rule, rules, counts = await _load_pricing_rules(db, lock_discounts=not as_draft)
     charge = calculate_subscription_charge(
@@ -697,7 +787,7 @@ async def generate_invoice_for_subscription(
     db.add(invoice)
     await db.flush()
 
-    if not as_draft:
+    if not as_draft and start == current_due:
         if charge.discount_rule:
             db.add(DiscountRedemption(
                 discount_rule_id=charge.discount_rule.id,
@@ -739,6 +829,8 @@ async def recheck_preview_item(
     )).scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Billing run item not found.")
+    if item.status not in (BillingRunItemStatus.FLAGGED, BillingRunItemStatus.FAILED):
+        raise HTTPException(status_code=409, detail="Only flagged or failed items can be retried.")
 
     query = (
         select(Subscription)

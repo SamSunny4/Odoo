@@ -1,6 +1,7 @@
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -130,8 +131,8 @@ async def test_invoice_confirm_cancel_with_reason_and_send(client: AsyncClient, 
     # 4. Send Invoice
     send_res = await client.post(f"/api/v1/invoices/{inv_id}/send", cookies=admin_cookies)
     assert send_res.status_code == 200
-    assert send_res.json()["send_status"] == "sent"
-    assert send_res.json()["sent_at"] is not None
+    assert send_res.json()["send_status"] == "queued"
+    assert send_res.json()["sent_at"] is None
 
     # 5. Cancel Invoice with audit reason
     cancel_res = await client.post(
@@ -297,24 +298,29 @@ async def test_control_tower_preview_commit_and_exception_queue(client: AsyncCli
     assert skip_res.status_code == 200
     assert skip_res.json()["status"] == "skipped"
 
-    # 6. Retry control
+    # 6. A skipped item is terminal within this run and cannot be re-opened by retry.
     retry_res = await client.post(
         f"/api/v1/control-tower/items/{item_to_skip['id']}/retry",
         cookies=admin_cookies,
     )
-    assert retry_res.status_code == 200
-    assert "status" in retry_res.json()
+    assert retry_res.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_automated_recurring_billing_run(client: AsyncClient, seed_users):
+async def test_automated_recurring_billing_run(client: AsyncClient, seed_users, monkeypatch):
     admin = seed_users["admin"]
     admin_cookies = auth_cookies(admin)
+    from app.worker import generate_recurring_invoices
+
+    monkeypatch.setattr(
+        generate_recurring_invoices,
+        "delay",
+        lambda: SimpleNamespace(id="test-billing-task"),
+    )
 
     auto_bill_res = await client.post("/api/v1/control-tower/auto-bill", cookies=admin_cookies)
     assert auto_bill_res.status_code == 200
     data = auto_bill_res.json()
-    assert data["status"] == "completed"
-    assert "invoices_created" in data
-    assert "emails_queued" in data
+    assert data["status"] == "queued"
+    assert data["task_id"] == "test-billing-task"
 

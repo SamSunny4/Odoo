@@ -67,7 +67,8 @@ class PaymentResponse(BaseModel):
     payment_method: PaymentMethod
     payment_date: date
     reference_note: Optional[str] = None
-    is_reversed: bool
+    is_reversed: bool = False
+    created_at: Optional[datetime] = None
 
 
 class GenerateDraftInvoiceRequest(BaseModel):

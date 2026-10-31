@@ -139,3 +139,24 @@ def portal_subscription_update_email(
             "Brightloop Software",
         ]),
     )
+
+
+def payment_refund_email(
+    *, company_name: str, invoice_number: str, amount: Decimal, currency: str,
+    reason: str, balance: Decimal,
+) -> tuple[str, str]:
+    return (
+        f"Payment refund/reversal for invoice {invoice_number}",
+        "\n".join([
+            f"Hello {company_name},",
+            "",
+            f"A payment reversal/refund of {amount} {currency} was processed for invoice {invoice_number}.",
+            f"Reason: {reason}",
+            f"Updated outstanding balance: {balance} {currency}",
+            "",
+            "If you have questions regarding this adjustment, please contact our billing team.",
+            "",
+            "Thank you,",
+            "Brightloop Software",
+        ]),
+    )

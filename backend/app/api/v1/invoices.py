@@ -1,10 +1,11 @@
 import uuid
+from html import escape
 from typing import List, Optional, Union
 from datetime import datetime, timezone
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select, func, or_, distinct
+from sqlalchemy import select, func, or_, and_, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -132,6 +133,21 @@ async def list_invoices(
         s = status.strip().lower()
         if s == "overdue":
             filters.append(Invoice.is_overdue == True)  # noqa: E712
+        elif s in ("partially_paid", "part_paid", "partiallypaid"):
+            filters.append(
+                and_(
+                    Invoice.status == InvoiceStatus.CONFIRMED,
+                    Invoice.paid_amount > Decimal("0.00"),
+                    Invoice.paid_amount < Invoice.total_amount,
+                )
+            )
+        elif s == "outstanding":
+            filters.append(
+                and_(
+                    Invoice.status == InvoiceStatus.CONFIRMED,
+                    (Invoice.total_amount - Invoice.paid_amount) > Decimal("0.00"),
+                )
+            )
         else:
             if s == "canceled":
                 s = "cancelled"
@@ -248,17 +264,25 @@ async def confirm_invoice(
     if inv.status != InvoiceStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft invoices can be confirmed.")
 
-    inv.status = InvoiceStatus.CONFIRMED
-
-    # Advance subscription next_billing_date if needed
+    # Advance only the currently due period. Historical invoices must not rewind
+    # the subscription schedule, and future periods must not skip an unpaid cycle.
     sub = (await db.execute(
         select(Subscription).where(Subscription.id == inv.subscription_id).options(selectinload(Subscription.plan))
     )).scalar_one_or_none()
     if sub and sub.status == SubscriptionStatus.ACTIVE:
+        current_due = sub.next_billing_date or sub.start_date
+        if inv.billing_period_start > current_due:
+            raise HTTPException(
+                status_code=409,
+                detail="An earlier billing period is still due; confirm invoices in billing order.",
+            )
         cadence = sub.plan.cadence if sub.plan else BillingCadence.MONTHLY
-        sub.next_billing_date = compute_next_billing_date(
-            inv.billing_period_start, cadence, sub.billing_anchor_day
-        )
+        if inv.billing_period_start == current_due:
+            sub.next_billing_date = compute_next_billing_date(
+                inv.billing_period_start, cadence, sub.billing_anchor_day
+            )
+
+    inv.status = InvoiceStatus.CONFIRMED
 
     await record_audit_event(
         db,
@@ -346,8 +370,8 @@ async def send_invoice(
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found.")
 
-    if inv.status == InvoiceStatus.CANCELLED:
-        raise HTTPException(status_code=400, detail="Cannot send a cancelled invoice.")
+    if inv.status not in (InvoiceStatus.CONFIRMED, InvoiceStatus.PAID):
+        raise HTTPException(status_code=409, detail="Only confirmed or paid invoices can be emailed.")
 
     recipient_email = inv.customer_snapshot.get("billing_email")
     if not recipient_email and inv.customer_account:
@@ -380,8 +404,8 @@ async def send_invoice(
         },
     )
 
-    inv.send_status = SendStatus.SENT
-    inv.sent_at = datetime.now(timezone.utc)
+    inv.send_status = SendStatus.QUEUED
+    inv.sent_at = None
 
     await record_audit_event(
         db,
@@ -422,33 +446,37 @@ async def get_invoice_pdf(
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found.")
 
+    currency = escape(str(inv.currency or "USD"))
+    money = lambda amount: f"{Decimal(str(amount)):,.2f} {currency}"
     cust = inv.customer_snapshot or {}
     addr = inv.billing_address_snapshot or {}
-    company_name = cust.get("company_name", "Valued Customer")
-    billing_email = cust.get("billing_email", "")
-    tax_id = cust.get("tax_id", "—")
-    address_line1 = addr.get("address_line1", "")
-    city = addr.get("city", "")
-    postal = addr.get("postal_code", "")
-    country = addr.get("country", "")
+    company_name = escape(str(cust.get("company_name") or "Valued Customer"))
+    billing_email = escape(str(cust.get("billing_email") or ""))
+    tax_id = escape(str(cust.get("tax_id") or "—"))
+    address_line1 = escape(str(addr.get("address_line1") or ""))
+    city = escape(str(addr.get("city") or ""))
+    postal = escape(str(addr.get("postal_code") or ""))
+    country = escape(str(addr.get("country") or ""))
 
     lines_html = ""
     for line in inv.lines:
+        description = escape(str(line.description or ""))
+        variant_name = escape(str(line.variant_name_snapshot or ""))
         lines_html += f"""
         <tr>
             <td style="padding: 10px; border-bottom: 1px solid #e2e8f0;">
-                <strong>{line.description}</strong>
-                {f'<br><small style="color: #64748b;">Variant: {line.variant_name_snapshot}</small>' if line.variant_name_snapshot else ''}
+                <strong>{description}</strong>
+                {f'<br><small style="color: #64748b;">Variant: {variant_name}</small>' if variant_name else ''}
             </td>
             <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: center;">{line.quantity}</td>
-            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right;">${line.unit_price_snapshot:,.2f}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right;">{money(line.unit_price_snapshot)}</td>
             <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right; color: #16a34a;">
-                {f'-${line.discount_amount:,.2f}' if line.discount_amount > 0 else '—'}
+                {money(-line.discount_amount) if line.discount_amount > 0 else '—'}
             </td>
             <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right;">
-                ${line.tax_amount:,.2f} {f'({line.tax_rate_snapshot}%)' if line.tax_rate_snapshot else ''}
+                {money(line.tax_amount)} {f'({line.tax_rate_snapshot}%)' if line.tax_rate_snapshot else ''}
             </td>
-            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 600;">${line.line_total:,.2f}</td>
+            <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: right; font-weight: 600;">{money(line.line_total)}</td>
         </tr>
         """
 
@@ -458,7 +486,7 @@ async def get_invoice_pdf(
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Invoice {inv.invoice_number}</title>
+<title>Invoice {escape(str(inv.invoice_number))}</title>
 <style>
     @page {{ size: A4; margin: 15mm; }}
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1e293b; margin: 0; padding: 20px; }}
@@ -491,8 +519,8 @@ async def get_invoice_pdf(
         </div>
     </div>
     <div style="text-align: right;">
-        <div class="invoice-title">{inv.invoice_number}</div>
-        <div style="margin-top: 8px;"><span class="status">{inv.status.value}</span></div>
+        <div class="invoice-title">{escape(str(inv.invoice_number))}</div>
+        <div style="margin-top: 8px;"><span class="status">{escape(str(inv.status.value))}</span></div>
         <div style="margin-top: 8px; font-size: 13px; color: #64748b;">
             Issue Date: <strong>{inv.issue_date}</strong><br>
             Payment Due: <strong>{inv.due_date}</strong>
@@ -514,7 +542,7 @@ async def get_invoice_pdf(
     <div style="text-align: right;">
         <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: #64748b;">Billing Period</div>
         <div style="font-size: 15px; font-weight: 600; margin-top: 4px;">{inv.billing_period_start} &rarr; {inv.billing_period_end}</div>
-        <div style="color: #64748b; font-size: 13px; margin-top: 4px;">Currency: {inv.currency}</div>
+        <div style="color: #64748b; font-size: 13px; margin-top: 4px;">Currency: {currency}</div>
     </div>
 </div>
 
@@ -535,15 +563,15 @@ async def get_invoice_pdf(
 </table>
 
 <div class="totals">
-    <div class="total-row"><span>Subtotal:</span><span>${inv.subtotal:,.2f}</span></div>
-    <div class="total-row" style="color: #16a34a;"><span>Discounts Applied:</span><span>-${inv.discount_amount:,.2f}</span></div>
-    <div class="total-row"><span>Taxes:</span><span>+${inv.tax_amount:,.2f}</span></div>
-    <div class="total-row grand-total"><span>Total Amount:</span><span>${inv.total_amount:,.2f} {inv.currency}</span></div>
-    <div class="total-row" style="color: #16a34a; font-weight: 600;"><span>Amount Paid:</span><span>${inv.paid_amount:,.2f}</span></div>
-    <div class="total-row" style="font-size: 16px; font-weight: 800; color: #dc2626;"><span>Balance Due:</span><span>${inv.outstanding_balance:,.2f} {inv.currency}</span></div>
+    <div class="total-row"><span>Subtotal:</span><span>{money(inv.subtotal)}</span></div>
+    <div class="total-row" style="color: #16a34a;"><span>Discounts Applied:</span><span>{money(-inv.discount_amount)}</span></div>
+    <div class="total-row"><span>Taxes:</span><span>{money(inv.tax_amount)}</span></div>
+    <div class="total-row grand-total"><span>Total Amount:</span><span>{money(inv.total_amount)}</span></div>
+    <div class="total-row" style="color: #16a34a; font-weight: 600;"><span>Amount Paid:</span><span>{money(inv.paid_amount)}</span></div>
+    <div class="total-row" style="font-size: 16px; font-weight: 800; color: #dc2626;"><span>Balance Due:</span><span>{money(inv.outstanding_balance)}</span></div>
 </div>
 
-{f'<div style="margin-top: 20px; padding: 12px; background: #fee2e2; border-left: 4px solid #dc2626; border-radius: 4px; font-size: 13px;"><strong>Cancellation Reason:</strong> {inv.cancellation_reason}</div>' if inv.cancellation_reason else ''}
+{f'<div style="margin-top: 20px; padding: 12px; background: #fee2e2; border-left: 4px solid #dc2626; border-radius: 4px; font-size: 13px;"><strong>Cancellation Reason:</strong> {escape(str(inv.cancellation_reason))}</div>' if inv.cancellation_reason else ''}
 
 <div class="footer">
     Thank you for your business! Direct remittances can be transferred via ACH or Wire to Brightloop Software Inc.<br>

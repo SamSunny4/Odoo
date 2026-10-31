@@ -529,6 +529,7 @@ export interface BillingRunSummaryApiItem {
   invoices_created_count: number;
   skipped_count: number;
   flagged_count: number;
+  failed_count: number;
 }
 
 export interface PortalProfile {
@@ -557,6 +558,52 @@ export interface ControlTowerItem {
   status: string;
   skip_reason?: string | null;
   resulting_invoice_id?: string | null;
+}
+
+export interface PaymentApiItem {
+  id: string;
+  invoice_id: string;
+  amount: MoneyValue;
+  payment_method: string;
+  payment_date: string;
+  reference_note?: string | null;
+  is_reversed: boolean;
+  created_at?: string | null;
+  customer_name?: string | null;
+  invoice_number?: string | null;
+  currency?: string;
+  reversal?: {
+    id: string;
+    payment_id: string;
+    reversal_amount: MoneyValue;
+    reason: string;
+    reversed_by_user_id: string;
+    reversed_at: string;
+  } | null;
+}
+
+export interface CollectionItem {
+  invoice_id: string;
+  invoice_number: string;
+  customer_account_id: string;
+  customer_name: string;
+  billing_email?: string | null;
+  total_amount: MoneyValue;
+  paid_amount: MoneyValue;
+  balance_due: MoneyValue;
+  currency: string;
+  issue_date: string;
+  due_date: string;
+  days_overdue: number;
+  aging_bucket: string;
+  last_reminder_sent_at?: string | null;
+}
+
+export interface CollectionQueueSummary {
+  total_overdue_balance: MoneyValue;
+  total_overdue_invoices: number;
+  aging_breakdown: Record<string, { count: number; amount: MoneyValue }>;
+  items: CollectionItem[];
 }
 
 export interface ControlTowerPreview {
@@ -882,7 +929,38 @@ export const api = {
     payment_method: string;
     payment_date: string;
     reference_note?: string;
-  }) => request<{ id: string; invoice_id: string }>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
+  }) => request<PaymentApiItem>('/payments', { method: 'POST', body: JSON.stringify(payload) }),
+  getPayments: (params?: QueryParams) => requestPaginated<PaymentApiItem>('/payments', params),
+  getPayment: (id: string) => request<PaymentApiItem>(`/payments/${id}`),
+  reversePayment: (id: string, reason: string, amount?: number) =>
+    request<PaymentApiItem>(`/payments/${id}/reverse`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, amount }),
+    }),
+  getCollectionQueue: (params?: {
+    search?: string;
+    aging_bucket?: string;
+    min_balance?: number;
+    sort_by?: string;
+    sort_order?: string;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.search) q.append('search', params.search);
+    if (params?.aging_bucket) q.append('aging_bucket', params.aging_bucket);
+    if (params?.min_balance !== undefined && params?.min_balance !== null) q.append('min_balance', String(params.min_balance));
+    if (params?.sort_by) q.append('sort_by', params.sort_by);
+    if (params?.sort_order) q.append('sort_order', params.sort_order);
+    const qs = q.toString();
+    return request<CollectionQueueSummary>(`/payments/collection-queue${qs ? `?${qs}` : ''}`);
+  },
+  sendCollectionReminder: (invoiceId: string, customMessage?: string) =>
+    request<{ status: string; message: string; dedupe_key: string }>(
+      `/payments/collection-queue/${invoiceId}/remind`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ custom_message: customMessage }),
+      }
+    ),
   sendQuotationEmail: (id: string) =>
     request<{ message: string; outbox_message_id: string }>(`/communications/subscriptions/${id}/send-quote`, { method: 'POST' }),
   sendInvoiceEmail: (id: string) =>
@@ -895,7 +973,7 @@ export const api = {
   getControlTowerPreview: (batchSize?: number) =>
     request<ControlTowerPreview>(`/control-tower/preview${batchSize ? `?batch_size=${batchSize}` : ''}`, { method: 'POST' }),
   commitControlTowerPreview: (runId: string, approvedItemIds: string[]) =>
-    request<{ invoices_created_count: number; total_invoiced_amount: MoneyValue }>(`/control-tower/runs/${runId}/commit`, {
+    request<{ invoices_created_count: number; failed_count: number; total_invoiced_amount: MoneyValue; status: string }>(`/control-tower/runs/${runId}/commit`, {
       method: 'POST',
       body: JSON.stringify({ approved_item_ids: approvedItemIds }),
     }),
@@ -915,7 +993,7 @@ export const api = {
       body: JSON.stringify({ reason }),
     }),
   triggerAutoBill: () =>
-    request<{ status: string; invoices_created: number; emails_queued: number; subscriptions_auto_closed: number }>(
+    request<{ status: string; task_id: string }>(
       '/control-tower/auto-bill',
       { method: 'POST' }
     ),

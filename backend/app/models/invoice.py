@@ -28,6 +28,7 @@ class InvoiceStatus(str, enum.Enum):
 
 class SendStatus(str, enum.Enum):
     NOT_SENT = "not_sent"
+    QUEUED = "queued"
     SENT = "sent"
     FAILED = "failed"
 

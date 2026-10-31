@@ -46,6 +46,7 @@ class CommitBatchResponse(BaseModel):
     invoices_created_count: int
     total_invoiced_amount: Decimal
     status: str
+    failed_count: int = 0
 
 
 class BillingRunSummaryResponse(BaseModel):
@@ -63,6 +64,7 @@ class BillingRunSummaryResponse(BaseModel):
     invoices_created_count: int = 0
     skipped_count: int = 0
     flagged_count: int = 0
+    failed_count: int = 0
 
 
 class SkipItemRequest(BaseModel):
@@ -80,6 +82,4 @@ class RetryItemResponse(BaseModel):
 
 class AutoBillResponse(BaseModel):
     status: str
-    invoices_created: int
-    emails_queued: int
-    subscriptions_auto_closed: int
+    task_id: str

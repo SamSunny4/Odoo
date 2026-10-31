@@ -15,7 +15,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.clock import organization_today
 from app.core.crypto import decrypt_secret
-from app.models.billing_run import BillingRunItemStatus
+from app.models.billing_run import BillingRunItem, BillingRunItemStatus
 from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.plan import Plan
@@ -135,8 +135,8 @@ async def _close_expired_subscriptions(
     return len(expired)
 
 
-async def _run_due_billing() -> tuple[int, int, int]:
-    """Create and commit a preview using the same calculation path as the admin UI."""
+async def _run_due_billing(batch_size: int = 250) -> tuple[int, int, int, int]:
+    """Bill due subscriptions in bounded database transactions in the background worker."""
     async_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
     try:
@@ -153,37 +153,56 @@ async def _run_due_billing() -> tuple[int, int, int]:
                 today=today,
                 actor_user_id=admin.id,
             )
-            due_count = await session.scalar(
-                select(func.count(Subscription.id)).where(
+            due_subscription_ids = (await session.execute(
+                select(Subscription.id)
+                .where(
                     Subscription.status == SubscriptionStatus.ACTIVE,
                     func.coalesce(Subscription.next_billing_date, Subscription.start_date) <= today,
                 )
-            )
-            if not due_count:
-                return 0, 0, auto_closed_count
-            run, rows = await create_billing_preview(
-                session,
-                actor_user_id=admin.id,
-                as_of=today,
-            )
-            clean_item_ids = [
-                row.item.id for row in rows
-                if row.item.status == BillingRunItemStatus.PENDING
-            ]
-            _, invoices = await commit_billing_preview(
-                session,
-                billing_run_id=run.id,
-                approved_item_ids=clean_item_ids,
-                actor_user_id=admin.id,
-                as_of=today,
-                allow_empty=True,
-            )
-            emails_queued = sum(
-                1
-                for invoice in invoices
-                if invoice.customer_snapshot.get("billing_email")
-            )
-            return len(invoices), emails_queued, auto_closed_count
+                .order_by(
+                    func.coalesce(Subscription.next_billing_date, Subscription.start_date),
+                    Subscription.subscription_number,
+                )
+            )).scalars().all()
+            if not due_subscription_ids:
+                return 0, 0, auto_closed_count, 0
+
+            invoices_created = 0
+            emails_queued = 0
+            failed_count = 0
+            for offset in range(0, len(due_subscription_ids), batch_size):
+                batch_ids = due_subscription_ids[offset:offset + batch_size]
+                run, rows = await create_billing_preview(
+                    session,
+                    actor_user_id=admin.id,
+                    as_of=today,
+                    batch_limit=batch_size,
+                    subscription_ids=batch_ids,
+                )
+                clean_item_ids = [
+                    row.item.id for row in rows
+                    if row.item.status == BillingRunItemStatus.PENDING
+                ]
+                _, invoices = await commit_billing_preview(
+                    session,
+                    billing_run_id=run.id,
+                    approved_item_ids=clean_item_ids,
+                    actor_user_id=admin.id,
+                    as_of=today,
+                    allow_empty=True,
+                )
+                invoices_created += len(invoices)
+                emails_queued += sum(
+                    1 for invoice in invoices
+                    if invoice.customer_snapshot.get("billing_email")
+                )
+                failed_count += await session.scalar(
+                    select(func.count(BillingRunItem.id)).where(
+                        BillingRunItem.billing_run_id == run.id,
+                        BillingRunItem.status == BillingRunItemStatus.FAILED,
+                    )
+                ) or 0
+            return invoices_created, emails_queued, auto_closed_count, failed_count
     finally:
         await async_engine.dispose()
 
@@ -191,12 +210,13 @@ async def _run_due_billing() -> tuple[int, int, int]:
 @celery_app.task(name="tasks.generate_recurring_invoices")
 def generate_recurring_invoices():
     """Automatically bill due clean subscriptions through the shared billing engine."""
-    invoices_created, emails_queued, auto_closed_count = asyncio.run(_run_due_billing())
+    invoices_created, emails_queued, auto_closed_count, failed_count = asyncio.run(_run_due_billing())
     return {
         "status": "completed",
         "invoices_created": invoices_created,
         "emails_queued": emails_queued,
         "subscriptions_auto_closed": auto_closed_count,
+        "failed_count": failed_count,
     }
 
 
@@ -535,7 +555,7 @@ def cleanup_outbox_messages(retention_days: int = 14):
 def queue_billing_reminders():
     """Queue idempotent one-week and one-day renewal reminders plus weekly overdue reminders."""
     today = organization_today()
-    renewal_targets = {today + timedelta(days=7): 7, today + timedelta(days=1): 1}
+    renewal_cutoff = today + timedelta(days=7)
     queued_renewals = 0
     queued_overdue = 0
 
@@ -546,13 +566,14 @@ def queue_billing_reminders():
             .join(Plan, Plan.id == Subscription.plan_id)
             .where(
                 Subscription.status == SubscriptionStatus.ACTIVE,
-                func.coalesce(Subscription.next_billing_date, Subscription.start_date).in_(renewal_targets),
+                func.coalesce(Subscription.next_billing_date, Subscription.start_date).between(today, renewal_cutoff),
             )
         ).all()
         for subscription, account, plan in due_subscriptions:
             billing_date = subscription.next_billing_date or subscription.start_date
-            lead_days = renewal_targets[billing_date]
-            dedupe_key = f"renewal-reminder:{subscription.id}:{billing_date.isoformat()}:{lead_days}"
+            days_until_billing = (billing_date - today).days
+            reminder_window = "week" if days_until_billing > 1 else "final"
+            dedupe_key = f"renewal-reminder:{subscription.id}:{billing_date.isoformat()}:{reminder_window}"
             if session.execute(select(OutboxMessage.id).where(OutboxMessage.dedupe_key == dedupe_key)).scalar_one_or_none():
                 continue
             subject, body = renewal_reminder_email(
@@ -560,7 +581,7 @@ def queue_billing_reminders():
                 plan_name=plan.name,
                 subscription_number=subscription.subscription_number,
                 billing_date=billing_date,
-                lead_days=lead_days,
+                lead_days=days_until_billing,
             )
             session.add(OutboxMessage(
                 topic="email",
@@ -587,12 +608,17 @@ def queue_billing_reminders():
         ).scalars().all()
         for invoice in overdue_invoices:
             days_overdue = (today - invoice.due_date).days
-            if days_overdue != 1 and days_overdue % 7 != 0:
+            if days_overdue < 1:
                 continue
+            reminder_window = (
+                "initial"
+                if days_overdue <= 6
+                else f"week-{((days_overdue - 7) // 7) + 1}"
+            )
             recipient = (invoice.customer_snapshot or {}).get("billing_email")
             if not recipient:
                 continue
-            dedupe_key = f"overdue-reminder:{invoice.id}:{today.isoformat()}"
+            dedupe_key = f"overdue-reminder:{invoice.id}:{reminder_window}"
             if session.execute(select(OutboxMessage.id).where(OutboxMessage.dedupe_key == dedupe_key)).scalar_one_or_none():
                 continue
             balance = max(Decimal("0.00"), Decimal(str(invoice.total_amount)) - Decimal(str(invoice.paid_amount)))

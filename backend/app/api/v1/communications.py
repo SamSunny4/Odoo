@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.deps import require_staff_or_admin
 from app.core.clock import organization_today
 from app.core.database import get_db
-from app.models.invoice import Invoice, InvoiceStatus
+from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.outbox import OutboxMessage, OutboxMessageStatus
 from app.models.subscription import Subscription, SubscriptionLine, SubscriptionStatus
 from app.models.user import User
@@ -144,6 +144,8 @@ async def send_invoice_email(
             "currency": invoice.currency,
         },
     )
+    invoice.send_status = SendStatus.QUEUED
+    invoice.sent_at = None
     await record_audit_event(
         db,
         entity_type="invoice",
@@ -202,6 +204,12 @@ async def retry_outbox_message(
     message.retry_count = 0
     message.last_error = None
     message.scheduled_at = message.created_at
+    invoice_id = (message.payload or {}).get("invoice_id")
+    if invoice_id:
+        invoice = await db.get(Invoice, uuid.UUID(str(invoice_id)))
+        if invoice:
+            invoice.send_status = SendStatus.QUEUED
+            invoice.sent_at = None
     await record_audit_event(
         db,
         entity_type="outbox_message",

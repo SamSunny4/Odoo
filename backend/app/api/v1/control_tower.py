@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Optional
+from typing import List
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.deps import require_admin, require_staff_or_admin
 from app.core.database import get_db
 from app.core.clock import organization_today
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.billing_run import BillingRun, BillingRunItem, BillingRunStatus, BillingRunItemStatus
 from app.models.subscription import Subscription
 from app.schemas.billing_run import (
@@ -31,11 +31,11 @@ router = APIRouter()
 
 @router.post("/preview", response_model=ControlTowerPreviewResponse, tags=["Control Tower"])
 async def preview_billing_batch(
-    batch_size: Optional[int] = Query(None, ge=1, le=500, description="Max subscriptions to evaluate in this batch"),
+    batch_size: int = Query(250, ge=1, le=500, description="Max subscriptions to evaluate in this batch"),
     db: AsyncSession = Depends(get_db),
     staff_user: User = Depends(require_staff_or_admin),
 ):
-    """Persist a reviewable preview for subscriptions due as of today with optional batch limit."""
+    """Persist a reviewable preview for a bounded batch of subscriptions due today."""
     run, rows = await create_billing_preview(
         db,
         actor_user_id=staff_user.id,
@@ -97,6 +97,12 @@ async def commit_billing_batch(
         invoices_created_count=len(invoices),
         total_invoiced_amount=sum((invoice.total_amount for invoice in invoices), start=Decimal("0.00")),
         status=run.status.value,
+        failed_count=await db.scalar(
+            select(func.count(BillingRunItem.id)).where(
+                BillingRunItem.billing_run_id == run.id,
+                BillingRunItem.status == BillingRunItemStatus.FAILED,
+            )
+        ) or 0,
     )
 
 
@@ -119,6 +125,7 @@ async def list_billing_runs(
         invoiced = sum(1 for it in r.items if it.status == BillingRunItemStatus.INVOICED)
         skipped = sum(1 for it in r.items if it.status == BillingRunItemStatus.SKIPPED)
         flagged = sum(1 for it in r.items if it.status == BillingRunItemStatus.FLAGGED)
+        failed = sum(1 for it in r.items if it.status == BillingRunItemStatus.FAILED)
         summaries.append(
             BillingRunSummaryResponse(
                 id=r.id,
@@ -135,6 +142,7 @@ async def list_billing_runs(
                 invoices_created_count=invoiced,
                 skipped_count=skipped,
                 flagged_count=flagged,
+                failed_count=failed,
             )
         )
     return summaries
@@ -206,10 +214,10 @@ async def list_exceptions(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_staff_or_admin),
 ):
-    """List all currently flagged exception items needing review across recent billing runs."""
+    """List flagged and failed billing items needing review or retry."""
     query = (
         select(BillingRunItem)
-        .where(BillingRunItem.status == BillingRunItemStatus.FLAGGED)
+        .where(BillingRunItem.status.in_([BillingRunItemStatus.FLAGGED, BillingRunItemStatus.FAILED]))
         .options(
             selectinload(BillingRunItem.subscription).selectinload(Subscription.customer_account),
             selectinload(BillingRunItem.subscription).selectinload(Subscription.plan),
@@ -258,8 +266,33 @@ async def retry_flagged_item(
     If warnings clear, moves status back to pending.
     """
     item = await recheck_preview_item(db, item_id=item_id, actor_user_id=user.id)
+    run = await db.get(BillingRun, item.billing_run_id)
+    if (
+        user.role == UserRole.ADMIN
+        and item.status == BillingRunItemStatus.PENDING
+        and run
+        and run.status in (
+            BillingRunStatus.COMMITTED,
+            BillingRunStatus.FAILED,
+        )
+    ):
+        await commit_billing_preview(
+            db,
+            billing_run_id=run.id,
+            approved_item_ids=[item.id],
+            actor_user_id=user.id,
+            as_of=organization_today(),
+        )
+        await db.refresh(item)
     msg = (
-        "Item re-evaluated. Issues resolved and marked clean for billing."
+        "Issues resolved and an invoice is now attached to this run."
+        if item.status == BillingRunItemStatus.INVOICED
+        else "Issue resolved; an administrator or the next scheduled billing run can now retry it."
+        if item.status == BillingRunItemStatus.PENDING and run and run.status in (
+            BillingRunStatus.COMMITTED,
+            BillingRunStatus.FAILED,
+        )
+        else "Item re-evaluated. Issues resolved and marked clean for billing."
         if item.status == BillingRunItemStatus.PENDING
         else f"Item re-evaluated with {len(item.warnings)} warning(s) remaining."
     )
@@ -292,9 +325,27 @@ async def skip_item(
     item = (await db.execute(query)).scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Billing run item not found.")
+    if item.status not in (
+        BillingRunItemStatus.PENDING,
+        BillingRunItemStatus.FLAGGED,
+        BillingRunItemStatus.FAILED,
+    ):
+        raise HTTPException(status_code=409, detail="Only pending, flagged, or failed items can be skipped.")
 
     item.status = BillingRunItemStatus.SKIPPED
     item.skip_reason = payload.reason.strip()
+    if item.billing_run_id:
+        run = await db.get(BillingRun, item.billing_run_id)
+        if run and run.status == BillingRunStatus.FAILED:
+            remaining_failures = await db.scalar(
+                select(func.count(BillingRunItem.id)).where(
+                    BillingRunItem.billing_run_id == run.id,
+                    BillingRunItem.status == BillingRunItemStatus.FAILED,
+                    BillingRunItem.id != item.id,
+                )
+            ) or 0
+            if not remaining_failures:
+                run.status = BillingRunStatus.COMMITTED
     await record_audit_event(
         db,
         entity_type="billing_run_item",
@@ -336,14 +387,11 @@ async def trigger_auto_billing(
     _user: User = Depends(require_admin),
 ):
     """
-    Trigger recurring billing run without blocking web client.
-    Executes automated bill-and-deliver pipeline for due subscriptions.
+    Queue recurring billing in the background so the web request returns immediately.
     """
-    from app.worker import _run_due_billing
-    invoices_created, deliveries, auto_closed = await _run_due_billing()
+    from app.worker import generate_recurring_invoices
+    task = generate_recurring_invoices.delay()
     return AutoBillResponse(
-        status="completed",
-        invoices_created=invoices_created,
-        emails_queued=deliveries,
-        subscriptions_auto_closed=auto_closed,
+        status="queued",
+        task_id=task.id,
     )

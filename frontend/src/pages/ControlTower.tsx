@@ -174,7 +174,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
       setCommitMessage(
         `${result.invoices_created_count} invoices created for $${Number(
           result.total_invoiced_amount
-        ).toFixed(2)}.`
+        ).toFixed(2)}. ${result.failed_count} items need retry.`
       );
       await fetchPreview();
     } catch (reason) {
@@ -228,10 +228,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
     setError(null);
     try {
       const res = await api.triggerAutoBill();
-      setCommitMessage(
-        `Automated run completed: ${res.invoices_created} invoices generated, ${res.emails_queued} emails queued, ${res.subscriptions_auto_closed} subscriptions auto-closed.`
-      );
-      await fetchPreview();
+      setCommitMessage(`Automated billing was queued in the background (job ${res.task_id}).`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Automated billing trigger failed.');
     } finally {
@@ -543,7 +540,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
       {activeTab === 'exceptions' && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 className="font-semibold text-slate-800 text-sm">Flagged Subscriptions Exception Queue</h2>
+            <h2 className="font-semibold text-slate-800 text-sm">Billing Exceptions &amp; Failed Attempts</h2>
             <button
               onClick={fetchExceptions}
               className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1"
@@ -588,7 +585,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                       onClick={() => handleRetryItem(ex.id)}
                       className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 flex items-center gap-1.5 transition"
                     >
-                      <RotateCw className="w-3.5 h-3.5" /> Re-evaluate
+                      <RotateCw className="w-3.5 h-3.5" /> {ex.status === 'failed' ? 'Retry billing' : 'Re-evaluate'}
                     </button>
                     <button
                       onClick={() => handleOpenSkip(ex)}
@@ -622,7 +619,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
             <div className="p-8 text-center text-sm text-slate-500">No previous billing runs recorded.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm min-w-[750px]">
+              <table className="w-full text-left border-collapse text-sm min-w-[900px]">
                 <thead>
                   <tr className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase border-b border-slate-200">
                     <th className="py-3 px-4">Run Date</th>
@@ -632,6 +629,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                     <th className="py-3 px-4 text-right">Invoices Created</th>
                     <th className="py-3 px-4 text-right">Skipped</th>
                     <th className="py-3 px-4 text-right">Flagged</th>
+                    <th className="py-3 px-4 text-right">Failed</th>
                     <th className="py-3 px-4 text-right">Projected Run</th>
                   </tr>
                 </thead>
@@ -662,6 +660,9 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                       <td className="py-3 px-4 text-right font-mono text-slate-500">{r.skipped_count}</td>
                       <td className="py-3 px-4 text-right font-mono text-amber-600 font-semibold">
                         {r.flagged_count}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono text-red-600 font-semibold">
+                        {r.failed_count}
                       </td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
                         ${Number(r.total_amount_projected).toFixed(2)}

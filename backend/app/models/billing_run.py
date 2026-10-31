@@ -27,6 +27,7 @@ class BillingRunItemStatus(str, enum.Enum):
     FLAGGED = "flagged"
     SKIPPED = "skipped"
     INVOICED = "invoiced"
+    FAILED = "failed"
 
 
 class BillingRun(Base, UUIDPrimaryKeyMixin):

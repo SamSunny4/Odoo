@@ -1,5 +1,6 @@
 from app.schemas.health import HealthCheckResponse
 from app.schemas.auth import (
+    AuthSuccessResponse,
     Token,
     TokenPayload,
     LoginRequest,
@@ -13,6 +14,7 @@ from app.schemas.auth import (
 
 __all__ = [
     "HealthCheckResponse",
+    "AuthSuccessResponse",
     "Token",
     "TokenPayload",
     "LoginRequest",

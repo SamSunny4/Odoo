@@ -118,8 +118,8 @@ async def update_staff_member(
             detail="Administrators cannot deactivate their own account.",
         )
 
-    # Prevent removing the last active admin
-    if payload.role == UserRole.STAFF and target_user.role == UserRole.ADMIN:
+    # Prevent removing or deactivating the last active admin
+    if (payload.role == UserRole.STAFF or payload.is_active is False) and target_user.role == UserRole.ADMIN and target_user.is_active:
         admin_count_query = select(func.count(User.id)).where(
             User.role == UserRole.ADMIN,
             User.is_active == True,  # noqa: E712
@@ -127,9 +127,10 @@ async def update_staff_member(
         )
         remaining_admins = (await db.execute(admin_count_query)).scalar_one()
         if remaining_admins == 0:
+            action_desc = "deactivate" if payload.is_active is False else "demote"
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot demote the sole active administrator.",
+                detail=f"Cannot {action_desc} the sole active administrator.",
             )
 
     changes = {}
@@ -158,4 +159,3 @@ async def update_staff_member(
         await db.refresh(target_user)
 
     return UserResponse.model_validate(target_user)
-

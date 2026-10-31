@@ -66,6 +66,31 @@ async def test_staff_cannot_access_admin_only_endpoints(client, seed_users):
 
 
 @pytest.mark.asyncio
+async def test_cannot_deactivate_sole_active_admin(client, seed_users):
+    """
+    Organization safeguard: cannot deactivate or demote the sole active administrator.
+    """
+    admin = seed_users["admin"]
+    client.cookies.update(auth_cookies(admin))
+
+    # 1. Self-deactivation attempt is rejected
+    res_self = await client.patch(
+        f"/api/v1/admin/staff/{admin.id}",
+        json={"is_active": False},
+    )
+    assert res_self.status_code == 400
+    assert "cannot deactivate" in res_self.json()["detail"].lower()
+
+    # 2. Demotion attempt when sole admin is rejected
+    res_demote = await client.patch(
+        f"/api/v1/admin/staff/{admin.id}",
+        json={"role": "staff"},
+    )
+    assert res_demote.status_code == 400
+    assert "cannot demote" in res_demote.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_product_cost_price_role_boundaries(client, seed_users):
     """
     Catalog cost_price visibility:
@@ -103,4 +128,3 @@ async def test_product_cost_price_role_boundaries(client, seed_users):
     products_customer = res_customer.json()
     assert len(products_customer) > 0
     assert products_customer[0]["cost_price"] is None
-

@@ -117,15 +117,9 @@ export interface DashboardSummary {
   renewals_due_7d_count: number;
 }
 
-function getAuthHeader(): Record<string, string> {
-  const token = localStorage.getItem('brightloop_jwt_token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const headers = {
     'Content-Type': 'application/json',
-    ...getAuthHeader(),
     ...(options.headers || {}),
   };
 
@@ -144,18 +138,15 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 export const api = {
-  // Auth
-  login: async (email: string, password: string) => {
-    const data = await request<{ access_token: string; token_type: string }>('/auth/login', {
+  // Auth (Relying strictly on secure HTTP-only cookies; zero tokens stored in browser script space)
+  login: (email: string, password: string) =>
+    request<{ message: string; user: AuthProfile['user'] }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
-    });
-    localStorage.setItem('brightloop_jwt_token', data.access_token);
-    return data;
-  },
+    }),
 
   signup: (payload: Record<string, unknown>) =>
-    request<{ access_token: string; token_type: string }>('/auth/signup', {
+    request<{ message: string; user: AuthProfile['user'] }>('/auth/signup', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -172,7 +163,6 @@ export const api = {
     } catch {
       // Ignore network errors
     }
-    localStorage.removeItem('brightloop_jwt_token');
   },
   resetPassword: (token: string, new_password: string) =>
     request<{ message: string }>('/auth/reset-password', {
@@ -229,4 +219,3 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 };
-

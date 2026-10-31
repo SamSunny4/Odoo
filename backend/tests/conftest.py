@@ -9,10 +9,14 @@ from app.models import Base
 from app.core.database import get_db
 from app.core.security import get_password_hash, create_access_token
 from app.core.rate_limit import login_limiter, forgot_password_limiter, reset_password_limiter
+from app.core.revocation import reset_revocations
 from app.models.user import User, UserRole
 from app.models.customer import CustomerAccount, CustomerAccountMembership, CustomerMembershipRole
 from app.models.plan import Plan, BillingCadence
 from app.models.catalog import Product, ProductType
+
+# Precompute standard test password hash once to avoid repeated 350ms bcrypt delays in fixtures
+PRECOMPUTED_HASH = get_password_hash("Brightloop@12345!")
 
 
 @pytest_asyncio.fixture
@@ -20,7 +24,7 @@ async def test_engine():
     """Create in-memory SQLite async engine with StaticPool for test isolation."""
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 5},
         poolclass=StaticPool,
     )
     async with engine.begin() as conn:
@@ -33,7 +37,7 @@ async def test_engine():
 
 @pytest_asyncio.fixture
 async def db_session(test_engine):
-    """Provide transactional async session for tests."""
+    """Provide a single transactional async session for tests to prevent concurrent SQLite lock contention."""
     session_factory = async_sessionmaker(
         bind=test_engine,
         class_=AsyncSession,
@@ -44,9 +48,16 @@ async def db_session(test_engine):
         yield session
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def reset_rate_limiters():
-    """Reset sliding-window rate limiters before and after each test."""
+    """
+    Standard synchronous autouse fixture resetting rate limiters.
+    Ensures Redis network I/O is disabled during tests to eliminate socket timeouts and stalls.
+    """
+    login_limiter.redis_enabled = False
+    forgot_password_limiter.redis_enabled = False
+    reset_password_limiter.redis_enabled = False
+
     login_limiter.reset()
     forgot_password_limiter.reset()
     reset_password_limiter.reset()
@@ -56,19 +67,19 @@ def reset_rate_limiters():
     reset_password_limiter.reset()
 
 
-@pytest_asyncio.fixture
-async def client(test_engine):
-    """Provide an unauthenticated AsyncClient hooked into the FastAPI test app."""
-    session_factory = async_sessionmaker(
-        bind=test_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autoflush=False,
-    )
+@pytest.fixture(autouse=True)
+def reset_token_revocations():
+    """Reset token revocation store before and after each test."""
+    reset_revocations()
+    yield
+    reset_revocations()
 
+
+@pytest_asyncio.fixture
+async def client(db_session):
+    """Provide an unauthenticated AsyncClient routed to the single shared test session."""
     async def override_get_db():
-        async with session_factory() as session:
-            yield session
+        yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
 
@@ -87,7 +98,7 @@ async def seed_users(db_session):
     # 1. Admin
     admin = User(
         email="admin@brightloop.local",
-        hashed_password=get_password_hash("Admin@12345!"),
+        hashed_password=PRECOMPUTED_HASH,
         full_name="Brightloop Admin",
         role=UserRole.ADMIN,
         is_active=True,
@@ -97,7 +108,7 @@ async def seed_users(db_session):
     # 2. Staff
     staff = User(
         email="staff@brightloop.local",
-        hashed_password=get_password_hash("Staff@12345!"),
+        hashed_password=PRECOMPUTED_HASH,
         full_name="Operations Staff",
         role=UserRole.STAFF,
         is_active=True,
@@ -107,7 +118,7 @@ async def seed_users(db_session):
     # 3. Customer A (Acme Corp)
     customer_a = User(
         email="customer.a@acme.com",
-        hashed_password=get_password_hash("Customer@12345!"),
+        hashed_password=PRECOMPUTED_HASH,
         full_name="Alice Acme",
         role=UserRole.CUSTOMER,
         is_active=True,
@@ -136,7 +147,7 @@ async def seed_users(db_session):
     # 4. Customer B (Beta Industries)
     customer_b = User(
         email="customer.b@beta.com",
-        hashed_password=get_password_hash("Customer@12345!"),
+        hashed_password=PRECOMPUTED_HASH,
         full_name="Bob Beta",
         role=UserRole.CUSTOMER,
         is_active=True,
@@ -201,4 +212,3 @@ def auth_cookies(user: User) -> dict:
         data={"sub": str(user.id), "email": user.email, "role": user.role.value}
     )
     return {"brightloop_session": token}
-

@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     SESSION_COOKIE_NAME: str = "brightloop_session"
     SESSION_COOKIE_SECURE: bool = False
     SESSION_COOKIE_SAMESITE: str = "lax"
+    TRUST_PROXY_HEADERS: bool = False
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() == "production"
+
+    @property
+    def effective_cookie_secure(self) -> bool:
+        """Enforces Secure flag on session cookies in production, or when explicitly enabled."""
+        return self.is_production or self.SESSION_COOKIE_SECURE
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/brightloop_subscriptions"

@@ -28,7 +28,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Restore session from HTTP-only cookie or cached credential
+  // Restore session purely from HTTP-only cookie
   const restoreSession = async () => {
     try {
       const meData = await api.getMe();
@@ -42,7 +42,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsAuthenticated(true);
     } catch {
       // Session absent or expired
-      localStorage.removeItem('brightloop_jwt_token');
       setIsAuthenticated(false);
       setCurrentUser(null);
     } finally {
@@ -58,17 +57,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       await api.login(email, pass);
-      const meData = await api.getMe();
-      setCurrentUser({
-        id: meData.user.id,
-        email: meData.user.email,
-        fullName: meData.user.full_name,
-        role: meData.user.role as UserRole,
-        companyName: meData.customer_account?.company_name,
-      });
-      setIsAuthenticated(true);
+      await restoreSession();
     } catch (error) {
-      localStorage.removeItem('brightloop_jwt_token');
       setCurrentUser(null);
       setIsAuthenticated(false);
       throw error;
@@ -80,8 +70,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signup = async (data: Record<string, unknown>) => {
     setIsLoading(true);
     try {
-      const tokenData = await api.signup(data);
-      localStorage.setItem('brightloop_jwt_token', tokenData.access_token);
+      await api.signup(data);
       await restoreSession();
     } finally {
       setIsLoading(false);
@@ -94,7 +83,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch {
       // Ignore network errors
     }
-    localStorage.removeItem('brightloop_jwt_token');
     setCurrentUser(null);
     setIsAuthenticated(false);
   };

@@ -9,6 +9,7 @@ from jose import JWTError, jwt
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.revocation import is_token_revoked
 from app.models.user import User, UserRole
 from app.models.customer import CustomerAccount, CustomerAccountMembership
 
@@ -28,6 +29,10 @@ async def get_current_user(
     )
     auth_token = request.cookies.get(settings.SESSION_COOKIE_NAME) or token
     if not auth_token:
+        raise credentials_exception
+
+    # Enforce server-side token revocation check
+    if is_token_revoked(auth_token):
         raise credentials_exception
 
     try:
@@ -75,4 +80,3 @@ def require_roles(*allowed_roles: UserRole):
 require_admin = require_roles(UserRole.ADMIN)
 require_staff_or_admin = require_roles(UserRole.ADMIN, UserRole.STAFF)
 require_customer = require_roles(UserRole.CUSTOMER)
-

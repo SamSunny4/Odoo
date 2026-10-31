@@ -1,3 +1,4 @@
+from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
@@ -16,9 +17,27 @@ def validate_email_address(v: str) -> str:
     return cleaned
 
 
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    full_name: str
+    role: UserRole
+    is_active: bool
+    created_at: datetime
+
+
+class AuthSuccessResponse(BaseModel):
+    message: str = "Authenticated successfully."
+    user: UserResponse
+
+
 class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+    message: str = "Authenticated successfully."
+    token_type: str = "cookie"
+    access_token: Optional[str] = None
+    user: Optional[UserResponse] = None
 
 
 class TokenPayload(BaseModel):
@@ -66,17 +85,6 @@ class SignupRequest(BaseModel):
     def validate_password(cls, v: str) -> str:
         validate_password_strength(v)
         return v
-
-
-class UserResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    email: str
-    full_name: str
-    role: UserRole
-    is_active: bool
-    created_at: datetime
 
 
 class ForgotPasswordRequest(BaseModel):

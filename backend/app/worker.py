@@ -1,11 +1,12 @@
 import asyncio
 import smtplib
 import uuid
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 from celery import Celery
 from celery.schedules import crontab
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
@@ -16,6 +17,7 @@ from app.models.billing_run import BillingRunItemStatus
 from app.models.invoice import Invoice, InvoiceStatus, SendStatus
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User, UserRole
+from app.models.outbox import OutboxMessage, OutboxMessageStatus
 from app.services.billing import create_billing_preview, commit_billing_preview
 
 celery_app = Celery(
@@ -138,6 +140,84 @@ def check_overdue_invoices():
         return {"overdue_count": len(overdue)}
 
 
+@celery_app.task(name="tasks.process_outbox_messages")
+def process_outbox_messages(batch_size: int = 50):
+    """
+    Durable outbox dispatcher: pulls pending messages from outbox_messages,
+    delivers external notifications/emails via SMTP adapter, and updates status
+    to SENT or FAILED with retry tracking.
+    """
+    now = datetime.now(timezone.utc)
+    with Session(sync_engine) as session:
+        messages = session.execute(
+            select(OutboxMessage)
+            .where(
+                OutboxMessage.status == OutboxMessageStatus.PENDING.value,
+                OutboxMessage.scheduled_at <= now,
+            )
+            .order_by(OutboxMessage.created_at.asc())
+            .limit(batch_size)
+        ).scalars().all()
+
+        processed_count = 0
+        for msg in messages:
+            msg.status = OutboxMessageStatus.PROCESSING.value
+            session.commit()
+
+            try:
+                if msg.topic == "email":
+                    to_email = msg.payload.get("to")
+                    subject = msg.payload.get("subject", "Notification from Brightloop")
+                    body = msg.payload.get("body")
+
+                    if not to_email or not body:
+                        raise ValueError(f"Outbox email message {msg.id} missing required 'to' or 'body' field.")
+
+                    email_msg = EmailMessage()
+                    email_msg["Subject"] = subject
+                    email_msg["From"] = settings.SMTP_FROM
+                    email_msg["To"] = to_email
+                    email_msg.set_content(body)
+
+                    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                        server.send_message(email_msg)
+
+                msg.status = OutboxMessageStatus.SENT.value
+                msg.sent_at = datetime.now(timezone.utc)
+                msg.last_error = None
+                session.commit()
+                processed_count += 1
+            except Exception as exc:
+                msg.retry_count += 1
+                msg.last_error = str(exc)
+                if msg.retry_count >= msg.max_retries:
+                    msg.status = OutboxMessageStatus.FAILED.value
+                else:
+                    msg.status = OutboxMessageStatus.PENDING.value
+                    msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
+                session.commit()
+
+        return {"processed": processed_count, "batch_size": len(messages)}
+
+
+@celery_app.task(name="tasks.cleanup_outbox_messages")
+def cleanup_outbox_messages(retention_days: int = 14):
+    """
+    Purges old sent and failed outbox messages past retention window to conserve database space.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=retention_days)
+    with Session(sync_engine) as session:
+        result = session.execute(
+            delete(OutboxMessage).where(
+                OutboxMessage.status.in_([OutboxMessageStatus.SENT.value, OutboxMessageStatus.FAILED.value]),
+                OutboxMessage.created_at < cutoff,
+            )
+        )
+        session.commit()
+        return {"purged_records": result.rowcount}
+
+
 celery_app.conf.beat_schedule = {
     "daily-recurring-billing-run": {
         "task": "tasks.generate_recurring_invoices",
@@ -146,5 +226,13 @@ celery_app.conf.beat_schedule = {
     "hourly-overdue-check": {
         "task": "tasks.check_overdue_invoices",
         "schedule": crontab(minute=0),
+    },
+    "outbox-dispatch-every-minute": {
+        "task": "tasks.process_outbox_messages",
+        "schedule": 60.0,
+    },
+    "daily-outbox-cleanup": {
+        "task": "tasks.cleanup_outbox_messages",
+        "schedule": crontab(hour=3, minute=0),
     },
 }

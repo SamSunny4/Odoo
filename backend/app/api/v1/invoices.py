@@ -380,6 +380,9 @@ async def send_invoice(
         },
     )
 
+    inv.send_status = SendStatus.SENT
+    inv.sent_at = datetime.now(timezone.utc)
+
     await record_audit_event(
         db,
         entity_type="invoice",

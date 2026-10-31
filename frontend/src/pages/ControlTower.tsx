@@ -485,12 +485,12 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
                           <div className="text-xs text-slate-500">{item.plan_name}</div>
                         </td>
                         <td className="py-3 px-4 text-right text-xs font-mono text-slate-600">
-                          ${Number(item.expected_subtotal).toFixed(2)} − $
+                          ₹{Number(item.expected_subtotal).toFixed(2)} − ₹
                           {Number(item.expected_discount_amount).toFixed(2)} + ₹
                           {Number(item.expected_tax_amount).toFixed(2)}
                         </td>
                         <td className="py-3 px-4 text-right font-semibold font-mono text-slate-900">
-                          ${Number(item.expected_total_amount).toFixed(2)}
+                          ₹{Number(item.expected_total_amount).toFixed(2)}
                         </td>
                         <td className="py-3 px-4">
                           {Number(item.variance_amount || 0) !== 0 ? (

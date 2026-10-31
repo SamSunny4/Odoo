@@ -541,7 +541,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Sales Price ($) *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Sales Price (₹) *</label>
                   <input
                     type="number"
                     step="0.01"
@@ -555,7 +555,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Cost Price ($) * <span className="text-slate-400 font-normal">(Admin Only)</span>
+                    Cost Price (₹) * <span className="text-slate-400 font-normal">(Admin Only)</span>
                   </label>
                   <input
                     type="number"
@@ -660,7 +660,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Price Adjustment ($) *
+                      Price Adjustment (₹) *
                     </label>
                     <input
                       type="number"
@@ -694,7 +694,7 @@ export const Catalog: React.FC<CatalogProps> = ({ onNavigate }) => {
                   <LoadingState message="Loading variants..." rows={2} />
                 ) : variantList.length === 0 ? (
                   <div className="text-center py-6 text-xs text-slate-400 bg-slate-50/50 rounded-lg border border-dashed border-slate-200">
-                    No variants configured yet. Use the form above to add an edition or brand (e.g. Odoo brand +$560).
+                    No variants configured yet. Use the form above to add an edition or brand (e.g. Odoo brand +₹500).
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">

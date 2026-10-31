@@ -46,7 +46,7 @@ class PaymentResponse(BaseModel):
 class PaymentDetailResponse(PaymentResponse):
     customer_name: Optional[str] = None
     invoice_number: Optional[str] = None
-    currency: str = "USD"
+    currency: str = "INR"
     recorded_by_email: Optional[str] = None
 
 
@@ -103,6 +103,6 @@ class PaymentWebhookPayload(BaseModel):
     external_id: str
     invoice_number: Optional[str] = None
     amount: Decimal
-    currency: str = "USD"
+    currency: str = "INR"
     metadata: Dict[str, Any] = {}
 

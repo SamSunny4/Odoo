@@ -120,7 +120,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   const [actionBusy, setActionBusy] = useState<boolean>(false);
   const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const formatMoney = (value: number | string, currencyCode = profile?.currency || 'USD') => {
+  const formatMoney = (value: number | string, currencyCode = profile?.currency || 'INR') => {
     const amount = Number(value);
     try {
       return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
@@ -576,7 +576,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
                             {inv.billing_period_start} – {inv.billing_period_end}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
-                            {formatMoney(inv.total_amount, inv.currency || profile?.currency || 'USD')}
+                            {formatMoney(inv.total_amount, inv.currency || profile?.currency || 'INR')}
                           </td>
                           <td className="py-3.5 px-4">
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 capitalize">

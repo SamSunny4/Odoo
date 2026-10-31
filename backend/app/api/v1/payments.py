@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.clock import organization_today
+from app.core.config import settings
 from app.models.invoice import Invoice, InvoiceStatus
 from app.models.customer import CustomerAccount
 from app.models.payment import Payment, PaymentMethod, PaymentReversal
@@ -48,7 +49,7 @@ def _build_payment_detail(payment: Payment) -> PaymentDetailResponse:
     invoice = payment.invoice
     customer_name = None
     invoice_number = None
-    currency = "USD"
+    currency = settings.ORGANIZATION_CURRENCY
     if invoice:
         invoice_number = invoice.invoice_number
         currency = invoice.currency

@@ -543,10 +543,10 @@ export const DiscountsAdmin: React.FC<DiscountsAdminProps> = ({ onNavigate }) =>
                             onChange={(e) => handleSimLineChange(idx, 'variant_id', e.target.value)}
                             className="w-full px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
                           >
-                            <option value="">Standard ($0.00)</option>
+                            <option value="">Standard (₹0.00)</option>
                             {variants.map((v) => (
                               <option key={v.id} value={v.id}>
-                                {v.name} (+${Number(v.price_adjustment).toFixed(2)})
+                                {v.name} (+₹{Number(v.price_adjustment).toFixed(2)})
                               </option>
                             ))}
                           </select>
@@ -996,7 +996,7 @@ export const DiscountsAdmin: React.FC<DiscountsAdminProps> = ({ onNavigate }) =>
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="percentage">Percentage (%)</option>
-                    <option value="fixed">Fixed Amount ($)</option>
+                    <option value="fixed">Fixed Amount (₹)</option>
                   </select>
                 </div>
                 <div>

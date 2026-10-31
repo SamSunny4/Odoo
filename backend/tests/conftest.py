@@ -1,5 +1,3 @@
-import sys
-import asyncio
 import time
 import threading
 from collections import defaultdict
@@ -9,13 +7,6 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.pool import StaticPool
-
-# Fix Windows event loop hang: On Windows, use SelectorEventLoopPolicy instead of Proactor
-if sys.platform == "win32":
-    try:
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except Exception:
-        pass
 
 from app.main import app
 from app.models import Base

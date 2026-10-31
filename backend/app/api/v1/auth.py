@@ -1,7 +1,5 @@
 import hashlib
 import secrets
-import smtplib
-from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -21,7 +19,6 @@ from app.core.rate_limit import (
 )
 from app.services.audit import record_audit_event
 from app.services.outbox import create_outbox_message
-from app.models.outbox import OutboxMessageStatus
 from app.models.user import User, UserRole, PasswordResetToken
 from app.models.customer import CustomerAccount, CustomerAccountMembership, CustomerMembershipRole
 from app.schemas.auth import (
@@ -247,7 +244,7 @@ async def forgot_password(
     Initiate single-use password reset link.
     Stores token hashed with SHA-256 and persists encrypted delivery payload in outbox.
     Uses configurable settings.FRONTEND_URL for the reset link.
-    Guarantees outbox retry path if direct SMTP dispatch fails.
+    Queues delivery through the durable outbox after persisting the request.
     Plaintext secrets are NEVER stored in the database; the reset token is encrypted at rest.
     Enforces sliding-window rate limiting.
     """
@@ -270,20 +267,11 @@ async def forgot_password(
         db.add(reset_token)
         await db.flush()
 
-        frontend_base = settings.FRONTEND_URL.rstrip('/')
-        reset_link = f"{frontend_base}/reset-password?token={raw_token}"
         email_subject = "Password Reset Request — Brightloop Software"
-        email_body = (
-            f"Hello {user.full_name},\n\n"
-            f"A password reset request was initiated for your Brightloop account.\n\n"
-            f"Use the following secure link within 1 hour to reset your password:\n"
-            f"{reset_link}\n\n"
-            f"If you did not request this, please disregard this email.\n\n"
-            f"Brightloop Security Team"
-        )
 
-        # Durable outbox message: token is encrypted with SECRET_KEY so plaintext is NEVER stored in DB
-        outbox_msg = await create_outbox_message(
+        # Persist only encrypted token material; the worker constructs and sends the email
+        # after this transaction commits, so SMTP cannot block or outrun the database commit.
+        await create_outbox_message(
             db,
             topic="email",
             payload={
@@ -297,30 +285,6 @@ async def forgot_password(
             },
         )
 
-        # Attempt immediate direct SMTP send (Mailpit in dev)
-        direct_sent = False
-        try:
-            msg = EmailMessage()
-            msg["Subject"] = email_subject
-            msg["From"] = settings.SMTP_FROM
-            msg["To"] = user.email
-            msg.set_content(email_body)
-
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=5) as server:
-                server.send_message(msg)
-            direct_sent = True
-        except Exception as exc:
-            print(f"[Auth] Direct SMTP dispatch failed ({exc}). Retrying via background outbox worker.")
-
-        if direct_sent:
-            outbox_msg.status = OutboxMessageStatus.SENT.value
-            outbox_msg.sent_at = datetime.now(timezone.utc)
-        else:
-            # Leave message PENDING and scheduled immediately so background Celery worker retries delivery
-            outbox_msg.status = OutboxMessageStatus.PENDING.value
-            outbox_msg.scheduled_at = datetime.now(timezone.utc)
-            outbox_msg.last_error = "Direct SMTP dispatch failed; queued for background worker retry."
-
         await record_audit_event(
             db,
             entity_type="user",
@@ -332,7 +296,7 @@ async def forgot_password(
         await db.commit()
 
     return {
-        "message": "If an account with that email exists, password reset instructions have been dispatched."
+        "message": "If an account with that email exists, password reset instructions will be sent shortly."
     }
 
 

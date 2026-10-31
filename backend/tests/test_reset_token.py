@@ -4,13 +4,18 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import pytest
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
-from app.core.config import settings
 from app.core.security import verify_password
 from app.models.user import User, PasswordResetToken
 from app.models.outbox import OutboxMessage, OutboxMessageStatus
-from app.worker import process_outbox_messages_async
+from app.worker import (
+    _claim_pending_outbox_messages_async,
+    _process_outbox_sync,
+    process_outbox_messages_async,
+)
 
 
 @pytest.mark.asyncio
@@ -22,7 +27,9 @@ async def test_forgot_password_generates_token_and_outbox(client, db_session, se
     """
     user = seed_users["customer_a"]
 
-    res = await client.post("/api/v1/auth/forgot-password", json={"email": user.email})
+    with patch("smtplib.SMTP") as smtp:
+        res = await client.post("/api/v1/auth/forgot-password", json={"email": user.email})
+        smtp.assert_not_called()
     assert res.status_code == 200
 
     # Verify reset token record in DB has SHA-256 hash (never raw token)
@@ -56,21 +63,22 @@ async def test_forgot_password_generates_token_and_outbox(client, db_session, se
     assert "raw_token" not in msg.payload
     assert "body" not in msg.payload
     assert "encrypted_reset_token" in msg.payload
+    assert msg.status == OutboxMessageStatus.PENDING.value
 
 
 @pytest.mark.asyncio
 async def test_forgot_password_outbox_worker_retry_on_smtp_failure(client, db_session, seed_users):
     """
-    When direct SMTP dispatch fails during forgot-password request, the outbox message
-    is left PENDING with error details. The background outbox worker then retries,
-    decrypts the token, constructs the email, and successfully delivers it.
+    The endpoint only persists an outbox message. A worker failure records a retry,
+    and a later worker run decrypts the token, builds the email, and delivers it.
     """
     user = seed_users["customer_a"]
 
-    # 1. Simulate direct SMTP server failure during forgot-password endpoint call
-    with patch("smtplib.SMTP", side_effect=OSError("SMTP server connection refused")):
+    # 1. The endpoint queues work without making SMTP calls in the request transaction.
+    with patch("smtplib.SMTP") as request_smtp:
         res = await client.post("/api/v1/auth/forgot-password", json={"email": user.email})
         assert res.status_code == 200
+        request_smtp.assert_not_called()
 
     outbox = (
         await db_session.execute(
@@ -80,9 +88,20 @@ async def test_forgot_password_outbox_worker_retry_on_smtp_failure(client, db_se
     assert len(outbox) == 1
     msg = outbox[0]
     assert msg.status == OutboxMessageStatus.PENDING.value
-    assert "queued for background worker retry" in (msg.last_error or "")
 
-    # 2. Trigger the outbox worker to retry delivery
+    # 2. A failed worker attempt stays pending and schedules a retry.
+    with patch("smtplib.SMTP", side_effect=OSError("SMTP server connection refused")):
+        result = await process_outbox_messages_async(db_session)
+        assert result["processed"] == 0
+
+    await db_session.refresh(msg)
+    assert msg.status == OutboxMessageStatus.PENDING.value
+    assert msg.retry_count == 1
+    assert "connection refused" in (msg.last_error or "")
+
+    # Make the retry due now, then verify successful delivery.
+    msg.scheduled_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await db_session.commit()
     with patch("smtplib.SMTP") as mock_smtp:
         mock_server = mock_smtp.return_value.__enter__.return_value
         result = await process_outbox_messages_async(db_session)
@@ -99,6 +118,64 @@ async def test_forgot_password_outbox_worker_retry_on_smtp_failure(client, db_se
     assert msg.status == OutboxMessageStatus.SENT.value
     assert msg.sent_at is not None
     assert msg.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_pending_outbox_message_can_only_be_claimed_once(db_session, seed_users):
+    user = seed_users["customer_a"]
+    message = OutboxMessage(
+        topic="email",
+        status=OutboxMessageStatus.PENDING.value,
+        payload={"to": user.email, "subject": "Test", "body": "Test"},
+        retry_count=0,
+        max_retries=3,
+        scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    db_session.add(message)
+    await db_session.commit()
+
+    now = datetime.now(timezone.utc)
+    first_claim = await _claim_pending_outbox_messages_async(db_session, now, batch_size=10)
+    second_claim = await _claim_pending_outbox_messages_async(db_session, now, batch_size=10)
+
+    assert [item.id for item in first_claim] == [message.id]
+    assert second_claim == []
+    await db_session.refresh(message)
+    assert message.status == OutboxMessageStatus.PROCESSING.value
+
+
+def test_celery_sync_outbox_worker_delivers_once():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    OutboxMessage.__table__.create(engine)
+    try:
+        with Session(engine) as session:
+            message = OutboxMessage(
+                topic="email",
+                status=OutboxMessageStatus.PENDING.value,
+                payload={"to": "customer@example.test", "subject": "Invoice", "body": "Test"},
+                retry_count=0,
+                max_retries=3,
+                scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+            session.add(message)
+            session.commit()
+
+            with patch("smtplib.SMTP") as mock_smtp:
+                first = _process_outbox_sync(session)
+                second = _process_outbox_sync(session)
+
+            assert first["processed"] == 1
+            assert second["processed"] == 0
+            assert mock_smtp.return_value.__enter__.return_value.send_message.call_count == 1
+            session.refresh(message)
+            assert message.status == OutboxMessageStatus.SENT.value
+    finally:
+        OutboxMessage.__table__.drop(engine)
+        engine.dispose()
 
 
 @pytest.mark.asyncio

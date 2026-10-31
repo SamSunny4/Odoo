@@ -6,7 +6,7 @@ from email.message import EmailMessage
 
 from celery import Celery
 from celery.schedules import crontab
-from sqlalchemy import create_engine, func, select, delete
+from sqlalchemy import case, create_engine, func, select, delete, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
@@ -176,6 +176,120 @@ def _deliver_outbox_message(msg: OutboxMessage) -> None:
             server.send_message(email_msg)
 
 
+def _stuck_outbox_ids_query(stuck_cutoff: datetime):
+    return (
+        select(OutboxMessage.id)
+        .where(
+            OutboxMessage.status == OutboxMessageStatus.PROCESSING.value,
+            OutboxMessage.updated_at < stuck_cutoff,
+        )
+        .order_by(OutboxMessage.updated_at.asc())
+        .with_for_update(skip_locked=True)
+    )
+
+
+def _reclaim_stuck_outbox_statement(stuck_ids: list, stuck_cutoff: datetime, now: datetime):
+    next_retry_count = OutboxMessage.retry_count + 1
+    return (
+        update(OutboxMessage)
+        .where(
+            OutboxMessage.id.in_(stuck_ids),
+            OutboxMessage.status == OutboxMessageStatus.PROCESSING.value,
+            OutboxMessage.updated_at < stuck_cutoff,
+        )
+        .values(
+            retry_count=next_retry_count,
+            status=case(
+                (next_retry_count >= OutboxMessage.max_retries, OutboxMessageStatus.FAILED.value),
+                else_=OutboxMessageStatus.PENDING.value,
+            ),
+            last_error="Worker crashed or timed out while processing; reclaimed.",
+            scheduled_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _pending_outbox_ids_query(now: datetime, batch_size: int):
+    return (
+        select(OutboxMessage.id)
+        .where(
+            OutboxMessage.status == OutboxMessageStatus.PENDING.value,
+            OutboxMessage.scheduled_at <= now,
+        )
+        .order_by(OutboxMessage.created_at.asc())
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
+
+
+def _claim_outbox_message_statement(message_id, now: datetime):
+    # Conditional update is a compare-and-set fallback on databases that ignore FOR UPDATE.
+    return (
+        update(OutboxMessage)
+        .where(
+            OutboxMessage.id == message_id,
+            OutboxMessage.status == OutboxMessageStatus.PENDING.value,
+            OutboxMessage.scheduled_at <= now,
+        )
+        .values(status=OutboxMessageStatus.PROCESSING.value, updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+
+
+async def _claim_pending_outbox_messages_async(
+    session: AsyncSession,
+    now: datetime,
+    batch_size: int,
+) -> list[OutboxMessage]:
+    candidate_ids = (await session.execute(_pending_outbox_ids_query(now, batch_size))).scalars().all()
+    claimed_ids = []
+    for message_id in candidate_ids:
+        result = await session.execute(_claim_outbox_message_statement(message_id, now))
+        if result.rowcount == 1:
+            claimed_ids.append(message_id)
+
+    # Commit claims before any external I/O so other workers skip these rows.
+    await session.commit()
+    if not claimed_ids:
+        return []
+
+    result = await session.execute(
+        select(OutboxMessage)
+        .where(OutboxMessage.id.in_(claimed_ids))
+        .order_by(OutboxMessage.created_at.asc())
+        .execution_options(populate_existing=True)
+    )
+    return result.scalars().all()
+
+
+def _claim_pending_outbox_messages_sync(
+    session: Session,
+    now: datetime,
+    batch_size: int,
+) -> list[OutboxMessage]:
+    candidate_ids = session.execute(_pending_outbox_ids_query(now, batch_size)).scalars().all()
+    claimed_ids = []
+    for message_id in candidate_ids:
+        result = session.execute(_claim_outbox_message_statement(message_id, now))
+        if result.rowcount == 1:
+            claimed_ids.append(message_id)
+
+    # Commit claims before any external I/O so other workers skip these rows.
+    session.commit()
+    if not claimed_ids:
+        return []
+
+    result = session.execute(
+        select(OutboxMessage)
+        .where(OutboxMessage.id.in_(claimed_ids))
+        .order_by(OutboxMessage.created_at.asc())
+        .execution_options(populate_existing=True)
+    )
+    return result.scalars().all()
+
+
 async def process_outbox_messages_async(
     session: AsyncSession,
     batch_size: int = 50,
@@ -190,46 +304,22 @@ async def process_outbox_messages_async(
     """
     now = datetime.now(timezone.utc)
 
-    # Step 1: Crash recovery - reclaim messages stuck in PROCESSING
+    # Step 1: Reclaim crashed workers with locked selection and conditional updates.
     stuck_cutoff = now - timedelta(minutes=stuck_timeout_minutes)
-    stuck_result = await session.execute(
-        select(OutboxMessage).where(
-            OutboxMessage.status == OutboxMessageStatus.PROCESSING.value,
-            OutboxMessage.updated_at < stuck_cutoff,
-        )
-    )
-    stuck_messages = stuck_result.scalars().all()
-
-    for stuck in stuck_messages:
-        stuck.retry_count += 1
-        stuck.last_error = "Worker crashed or timed out while processing; reclaimed."
-        if stuck.retry_count >= stuck.max_retries:
-            stuck.status = OutboxMessageStatus.FAILED.value
-        else:
-            stuck.status = OutboxMessageStatus.PENDING.value
-            stuck.scheduled_at = now
-    if stuck_messages:
+    stuck_ids = (await session.execute(_stuck_outbox_ids_query(stuck_cutoff))).scalars().all()
+    reclaimed_count = 0
+    if stuck_ids:
+        reclaimed = await session.execute(_reclaim_stuck_outbox_statement(stuck_ids, stuck_cutoff, now))
+        reclaimed_count = max(reclaimed.rowcount or 0, 0)
         await session.commit()
 
-    # Step 2: Query pending messages
-    pending_result = await session.execute(
-        select(OutboxMessage)
-        .where(
-            OutboxMessage.status == OutboxMessageStatus.PENDING.value,
-            OutboxMessage.scheduled_at <= now,
-        )
-        .order_by(OutboxMessage.created_at.asc())
-        .limit(batch_size)
-    )
-    messages = pending_result.scalars().all()
+    # Step 2: Atomically claim pending messages before sending them.
+    messages = await _claim_pending_outbox_messages_async(session, now, batch_size)
 
     processed_count = 0
     for msg in messages:
-        msg.status = OutboxMessageStatus.PROCESSING.value
-        await session.commit()
-
         try:
-            _deliver_outbox_message(msg)
+            await asyncio.to_thread(_deliver_outbox_message, msg)
             msg.status = OutboxMessageStatus.SENT.value
             msg.sent_at = datetime.now(timezone.utc)
             msg.last_error = None
@@ -245,49 +335,27 @@ async def process_outbox_messages_async(
                 msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
             await session.commit()
 
-    return {"processed": processed_count, "reclaimed": len(stuck_messages), "batch_size": len(messages)}
+    return {"processed": processed_count, "reclaimed": reclaimed_count, "batch_size": len(messages)}
 
 
 def _process_outbox_sync(session: Session, batch_size: int = 50, stuck_timeout_minutes: int = 5) -> dict:
     """Synchronous dispatcher implementation for Celery tasks."""
     now = datetime.now(timezone.utc)
 
-    # Step 1: Crash recovery - reclaim messages stuck in PROCESSING
+    # Step 1: Reclaim crashed workers with locked selection and conditional updates.
     stuck_cutoff = now - timedelta(minutes=stuck_timeout_minutes)
-    stuck_messages = session.execute(
-        select(OutboxMessage).where(
-            OutboxMessage.status == OutboxMessageStatus.PROCESSING.value,
-            OutboxMessage.updated_at < stuck_cutoff,
-        )
-    ).scalars().all()
-
-    for stuck in stuck_messages:
-        stuck.retry_count += 1
-        stuck.last_error = "Worker crashed or timed out while processing; reclaimed."
-        if stuck.retry_count >= stuck.max_retries:
-            stuck.status = OutboxMessageStatus.FAILED.value
-        else:
-            stuck.status = OutboxMessageStatus.PENDING.value
-            stuck.scheduled_at = now
-    if stuck_messages:
+    stuck_ids = session.execute(_stuck_outbox_ids_query(stuck_cutoff)).scalars().all()
+    reclaimed_count = 0
+    if stuck_ids:
+        reclaimed = session.execute(_reclaim_stuck_outbox_statement(stuck_ids, stuck_cutoff, now))
+        reclaimed_count = max(reclaimed.rowcount or 0, 0)
         session.commit()
 
-    # Step 2: Query pending messages
-    messages = session.execute(
-        select(OutboxMessage)
-        .where(
-            OutboxMessage.status == OutboxMessageStatus.PENDING.value,
-            OutboxMessage.scheduled_at <= now,
-        )
-        .order_by(OutboxMessage.created_at.asc())
-        .limit(batch_size)
-    ).scalars().all()
+    # Step 2: Atomically claim pending messages before sending them.
+    messages = _claim_pending_outbox_messages_sync(session, now, batch_size)
 
     processed_count = 0
     for msg in messages:
-        msg.status = OutboxMessageStatus.PROCESSING.value
-        session.commit()
-
         try:
             _deliver_outbox_message(msg)
             msg.status = OutboxMessageStatus.SENT.value
@@ -305,7 +373,7 @@ def _process_outbox_sync(session: Session, batch_size: int = 50, stuck_timeout_m
                 msg.scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=30 * (2 ** msg.retry_count))
             session.commit()
 
-    return {"processed": processed_count, "reclaimed": len(stuck_messages), "batch_size": len(messages)}
+    return {"processed": processed_count, "reclaimed": reclaimed_count, "batch_size": len(messages)}
 
 
 @celery_app.task(name="tasks.process_outbox_messages")

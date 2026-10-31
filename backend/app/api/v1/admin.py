@@ -7,9 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import get_password_hash
 from app.models.user import User, UserRole
-from app.schemas.auth import CreateStaffRequest, UpdateStaffRequest, UserResponse
+from app.schemas.auth import CreateStaffRequest, UpdateStaffRequest, UserResponse, CustomerAccountSummary
+from app.models.customer import CustomerAccount
 from app.schemas.pagination import PaginatedResponse
-from app.api.v1.deps import require_admin
+from app.api.v1.deps import require_admin, require_staff_or_admin
 from app.services.audit import record_audit_event
 
 router = APIRouter()
@@ -233,3 +234,19 @@ async def update_staff_member(
         await db.refresh(target_user)
 
     return UserResponse.model_validate(target_user)
+
+
+@router.get(
+    "/customers",
+    response_model=List[CustomerAccountSummary],
+    tags=["Admin"],
+)
+async def list_customer_accounts(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_staff_or_admin),
+):
+    """List customer accounts for quotation and subscription creation. Accessible to Staff and Admin."""
+    query = select(CustomerAccount).order_by(CustomerAccount.company_name.asc())
+    accounts = (await db.execute(query)).scalars().all()
+    return [CustomerAccountSummary.model_validate(acc) for acc in accounts]
+

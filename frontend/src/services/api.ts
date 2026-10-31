@@ -101,8 +101,8 @@ export interface UpdatePlanPayload {
   cadence?: string;
   base_price?: number | string;
   min_quantity?: number;
-  available_from?: string | null;
-  available_to?: string | null;
+  available_from?: string;
+  available_to?: string;
   auto_close_on_expiry?: boolean;
   allow_early_close?: boolean;
   allow_pause?: boolean;
@@ -170,7 +170,7 @@ export interface UpdateDiscountRulePayload {
   target_product_id?: string;
   min_spend?: number | string;
   min_quantity?: number;
-  max_usage_limit?: number | null;
+  max_usage_limit?: number;
   valid_from?: string;
   valid_to?: string;
   is_active?: boolean;
@@ -211,6 +211,134 @@ export interface CalculatePreviewResult {
   tax_amount: MoneyValue;
   total_amount: MoneyValue;
   warnings: string[];
+}
+
+export interface QuotationTemplateApiItem {
+  id: string;
+  name: string;
+  validity_days: number;
+  default_plan_id?: string | null;
+  default_plan_name?: string | null;
+  default_lines: {
+    product_id: string;
+    product_name?: string;
+    product_variant_id?: string | null;
+    variant_name?: string | null;
+    quantity: number;
+  }[];
+  created_at?: string;
+}
+
+export interface CreateQuotationTemplatePayload {
+  name: string;
+  validity_days: number;
+  default_plan_id?: string;
+  default_lines?: {
+    product_id: string;
+    product_variant_id?: string;
+    quantity: number;
+  }[];
+}
+
+export interface UpdateQuotationTemplatePayload {
+  name?: string;
+  validity_days?: number;
+  default_plan_id?: string;
+  default_lines?: {
+    product_id: string;
+    product_variant_id?: string;
+    quantity: number;
+  }[];
+}
+
+export interface SubscriptionAuditItem {
+  id: string;
+  action: string;
+  changes: Record<string, unknown>;
+  actor_user_id?: string | null;
+  actor_name?: string | null;
+  actor_email?: string | null;
+  actor_role?: string | null;
+  timestamp: string;
+}
+
+export interface SubscriptionLineItem {
+  id: string;
+  product_id: string;
+  product_name?: string | null;
+  product_variant_id?: string | null;
+  variant_name?: string | null;
+  quantity: number;
+  unit_price: MoneyValue;
+  tax_rule_id?: string | null;
+  tax_rate?: MoneyValue | null;
+  line_subtotal: MoneyValue;
+}
+
+export interface SubscriptionDetailApiItem {
+  id: string;
+  subscription_number: string;
+  customer_account_id: string;
+  customer_name: string;
+  customer_billing_email?: string | null;
+  customer_address?: string | null;
+  plan_id: string;
+  plan_name: string;
+  plan_cadence?: string | null;
+  plan_base_price: MoneyValue;
+  plan_allow_pause: boolean;
+  plan_allow_early_close: boolean;
+  plan_allow_renewal: boolean;
+  plan_auto_close_on_expiry: boolean;
+  status: string;
+  start_date: string;
+  expiry_date?: string | null;
+  next_billing_date?: string | null;
+  billing_anchor_day: number;
+  payment_terms_days: number;
+  total_amount: MoneyValue;
+  lines: SubscriptionLineItem[];
+  audit_history: SubscriptionAuditItem[];
+}
+
+export interface CreateSubscriptionPayload {
+  customer_account_id: string;
+  plan_id: string;
+  template_id?: string;
+  start_date?: string;
+  expiry_date?: string;
+  billing_anchor_day?: number;
+  payment_terms_days?: number;
+  status?: string;
+  lines?: {
+    product_id: string;
+    product_variant_id?: string;
+    quantity: number;
+    unit_price?: number | string;
+    tax_rule_id?: string;
+  }[];
+}
+
+export interface UpdateSubscriptionPayload {
+  plan_id?: string;
+  start_date?: string;
+  expiry_date?: string;
+  billing_anchor_day?: number;
+  payment_terms_days?: number;
+  lines?: {
+    product_id: string;
+    product_variant_id?: string;
+    quantity: number;
+    unit_price?: number | string;
+    tax_rule_id?: string;
+  }[];
+}
+
+export interface CustomerAccountApiItem {
+  id: string;
+  company_name: string;
+  billing_email: string;
+  currency: string;
 }
 
 export interface SubscriptionApiItem {
@@ -494,12 +622,60 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  // Subscriptions
+  // Quotation Templates
+  getQuotationTemplates: (params?: QueryParams) =>
+    requestPaginated<QuotationTemplateApiItem>('/quotation-templates', params),
+  getAllQuotationTemplates: () =>
+    request<QuotationTemplateApiItem[]>('/quotation-templates?envelope=false'),
+  getQuotationTemplate: (id: string) =>
+    request<QuotationTemplateApiItem>(`/quotation-templates/${id}`),
+  createQuotationTemplate: (payload: CreateQuotationTemplatePayload) =>
+    request<QuotationTemplateApiItem>('/quotation-templates', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateQuotationTemplate: (id: string, payload: UpdateQuotationTemplatePayload) =>
+    request<QuotationTemplateApiItem>(`/quotation-templates/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  deleteQuotationTemplate: (id: string) =>
+    request<{ message: string }>(`/quotation-templates/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Subscriptions & Quotations Lifecycle
   getSubscriptions: (params?: QueryParams) => requestPaginated<SubscriptionApiItem>('/subscriptions', params),
+  getSubscription: (id: string) => request<SubscriptionDetailApiItem>(`/subscriptions/${id}`),
+  createSubscription: (payload: CreateSubscriptionPayload) =>
+    request<SubscriptionApiItem>('/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateSubscription: (id: string, payload: UpdateSubscriptionPayload) =>
+    request<SubscriptionApiItem>(`/subscriptions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  transitionSubscriptionStatus: (
+    id: string,
+    action: string,
+    reason?: string,
+    renewal_duration_days?: number
+  ) =>
+    request<SubscriptionApiItem>(`/subscriptions/${id}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ action, reason, renewal_duration_days }),
+    }),
+  getSubscriptionHistory: (id: string) => request<SubscriptionAuditItem[]>(`/subscriptions/${id}/history`),
+
   pauseSubscription: (id: string) =>
     request<{ message: string; status: string }>(`/subscriptions/${id}/pause`, { method: 'POST' }),
   resumeSubscription: (id: string) =>
     request<{ message: string; status: string }>(`/subscriptions/${id}/resume`, { method: 'POST' }),
+
+  // Customers for staff/admin selection
+  getCustomerAccounts: () => request<CustomerAccountApiItem[]>('/admin/customers'),
 
   // Invoices & Payments
   getInvoices: (params?: QueryParams) => requestPaginated<InvoiceApiItem>('/invoices', params),

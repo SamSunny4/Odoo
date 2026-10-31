@@ -1,40 +1,70 @@
-import React from 'react';
-import { Plus, CheckCircle, Clock, Pause } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { api } from '../services/api';
+import { Plus, CheckCircle, Clock, Pause, RefreshCw } from 'lucide-react';
+
+interface SubItem {
+  id: string;
+  subscription_number: string;
+  customer_name: string;
+  plan_name: string;
+  status: string;
+  total_amount: number;
+  next_billing_date?: string;
+  lines: any[];
+}
 
 export const Subscriptions: React.FC = () => {
+  const [subscriptions, setSubscriptions] = useState<SubItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [isLive, setIsLive] = useState<boolean>(false);
 
-  const subscriptions = [
-    {
-      id: '1',
-      number: 'SUB-2026-0001',
-      customer: 'Acme Corporation',
-      plan: 'Standard Business Monthly',
-      status: 'active',
-      cadence: 'Monthly',
-      amount: '$669.75',
-      nextBilling: '2026-11-01',
-    },
-    {
-      id: '2',
-      number: 'SUB-2026-0002',
-      customer: 'Nexus Global Tech',
-      plan: 'Enterprise Annual Plan',
-      status: 'quotation',
-      cadence: 'Yearly',
-      amount: '$1,320.00',
-      nextBilling: 'Pending Acceptance',
-    },
-    {
-      id: '3',
-      number: 'SUB-2026-0003',
-      customer: 'Solaria Retail Ltd',
-      plan: 'Standard Business Monthly',
-      status: 'paused',
-      cadence: 'Monthly',
-      amount: '$245.00',
-      nextBilling: 'Paused (Resume allowed)',
-    },
-  ];
+  const fetchSubscriptions = async () => {
+    setLoading(true);
+    try {
+      const data = await api.getSubscriptions();
+      setSubscriptions(data);
+      setIsLive(true);
+    } catch {
+      // Fallback
+      setSubscriptions([
+        {
+          id: '1',
+          subscription_number: 'SUB-2026-0001',
+          customer_name: 'Acme Corporation',
+          plan_name: 'Standard Business Monthly',
+          status: 'active',
+          total_amount: 905.00,
+          next_billing_date: '2026-11-01',
+          lines: [],
+        },
+      ]);
+      setIsLive(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSubscriptions();
+  }, []);
+
+  const handlePause = async (id: string) => {
+    try {
+      await api.pauseSubscription(id);
+      await fetchSubscriptions();
+    } catch (e: any) {
+      alert(e.message);
+    }
+  };
+
+  const handleResume = async (id: string) => {
+    try {
+      await api.resumeSubscription(id);
+      await fetchSubscriptions();
+    } catch (e: any) {
+      alert(e.message);
+    }
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -72,15 +102,33 @@ export const Subscriptions: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Subscriptions & Quotations</h1>
-          <p className="text-sm text-slate-500">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Subscriptions & Quotations</h1>
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                isLive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {isLive ? '● Live API Data' : 'Cached Baseline'}
+            </span>
+          </div>
+          <p className="text-sm text-slate-500 mt-1">
             Lifecycle state flow: Draft → Quotation → Confirmed → Active → Closed.
           </p>
         </div>
-        <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition flex items-center gap-2 shadow-xs">
-          <Plus className="w-4 h-4" />
-          Create Quote / Subscription
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={fetchSubscriptions}
+            className="p-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition flex items-center gap-2 shadow-xs">
+            <Plus className="w-4 h-4" />
+            Create Quote
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
@@ -89,7 +137,7 @@ export const Subscriptions: React.FC = () => {
             <tr className="bg-slate-50 text-slate-600 text-xs font-semibold uppercase tracking-wider border-b border-slate-200">
               <th className="py-3 px-4">Subscription #</th>
               <th className="py-3 px-4">Customer</th>
-              <th className="py-3 px-4">Plan & Cadence</th>
+              <th className="py-3 px-4">Plan</th>
               <th className="py-3 px-4">Status</th>
               <th className="py-3 px-4 text-right">Amount</th>
               <th className="py-3 px-4">Next Billing Date</th>
@@ -99,19 +147,32 @@ export const Subscriptions: React.FC = () => {
           <tbody className="divide-y divide-slate-200">
             {subscriptions.map((s) => (
               <tr key={s.id} className="hover:bg-slate-50/60 transition">
-                <td className="py-3.5 px-4 font-mono font-semibold text-indigo-700">{s.number}</td>
-                <td className="py-3.5 px-4 font-medium text-slate-900">{s.customer}</td>
-                <td className="py-3.5 px-4">
-                  <div className="text-slate-800 font-medium">{s.plan}</div>
-                  <div className="text-xs text-slate-400">{s.cadence}</div>
-                </td>
+                <td className="py-3.5 px-4 font-mono font-semibold text-indigo-700">{s.subscription_number}</td>
+                <td className="py-3.5 px-4 font-medium text-slate-900">{s.customer_name}</td>
+                <td className="py-3.5 px-4 text-slate-800 font-medium">{s.plan_name}</td>
                 <td className="py-3.5 px-4">{getStatusBadge(s.status)}</td>
-                <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">{s.amount}</td>
-                <td className="py-3.5 px-4 text-xs font-medium text-slate-600">{s.nextBilling}</td>
+                <td className="py-3.5 px-4 text-right font-mono font-semibold text-slate-900">
+                  ${Number(s.total_amount).toFixed(2)}
+                </td>
+                <td className="py-3.5 px-4 text-xs font-medium text-slate-600">{s.next_billing_date || 'N/A'}</td>
                 <td className="py-3.5 px-4 text-right">
-                  <button className="text-xs text-indigo-600 font-semibold hover:text-indigo-800">
-                    Manage
-                  </button>
+                  {s.status === 'active' ? (
+                    <button
+                      onClick={() => handlePause(s.id)}
+                      className="text-xs text-amber-600 font-semibold hover:text-amber-800"
+                    >
+                      Pause
+                    </button>
+                  ) : s.status === 'paused' ? (
+                    <button
+                      onClick={() => handleResume(s.id)}
+                      className="text-xs text-emerald-600 font-semibold hover:text-emerald-800"
+                    >
+                      Resume
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-400">Locked</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -121,4 +182,3 @@ export const Subscriptions: React.FC = () => {
     </div>
   );
 };
-

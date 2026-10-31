@@ -61,8 +61,11 @@ source .venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Run migrations & seed baseline records
+# Initialize database schema and seed baseline records
 python -m app.seed
+
+# (Optional) For versioned schema tracking with Alembic:
+alembic upgrade head
 
 # Start FastAPI server
 uvicorn app.main:app --reload --port 8000
@@ -95,9 +98,8 @@ docker compose up -d --build
 
 ## 4. Architectural Documents
 
-- **Domain Model & ER Specifications**: [docs/architecture.md](file:///e:/Odoo/docs/architecture.md)
-- **Phase 0 Architecture Plan**: [phase_0_plan.md](file:///C:/Users/samsu/.gemini/antigravity/brain/7496c2b0-3276-4862-8850-55f4b8fd0380/phase_0_plan.md)
-- **Contribution & Git Guidelines**: [CONTRIBUTING.md](file:///e:/Odoo/CONTRIBUTING.md)
+- **Domain Model & ER Specifications**: [docs/architecture.md](docs/architecture.md)
+- **Contribution & Git Guidelines**: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 

@@ -1,5 +1,5 @@
 from app.models.base import Base, UUIDPrimaryKeyMixin, TimestampMixin
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, PasswordResetToken
 from app.models.customer import CustomerAccount, CustomerAccountMembership, CustomerMembershipRole
 from app.models.catalog import Product, ProductVariant, ProductType
 from app.models.plan import Plan, BillingCadence

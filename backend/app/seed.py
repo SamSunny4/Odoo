@@ -12,16 +12,18 @@ from app.models.catalog import Product, ProductVariant, ProductType
 from app.models.plan import Plan, BillingCadence
 from app.models.tax import TaxRule
 from app.models.discount import DiscountRule, DiscountType, DiscountScope
+from app.models.subscription import Subscription, SubscriptionLine, SubscriptionStatus
+from app.models.invoice import Invoice, InvoiceLine, InvoiceStatus, SendStatus
 
 
 async def seed_data():
     """Idempotent seed script provisioning initial admin, catalog, and test records."""
-    print("🚀 Initializing Brightloop database schema...")
+    print("[Init] Initializing Brightloop database schema...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with AsyncSessionLocal() as session:
-        print("🌱 Checking existing seeded users...")
+        print("[Seed] Checking existing seeded users...")
 
         # 1. Admin User
         admin_email = "admin@brightloop.local"
@@ -191,8 +193,118 @@ async def seed_data():
             session.add(discount)
             print("  + Created Discount Rule (15% High Volume)")
 
+        await session.flush()
+
+        # 8. Sample Subscription for Acme Corporation
+        sub_query = select(Subscription).where(Subscription.subscription_number == "SUB-2026-0001")
+        sub = (await session.execute(sub_query)).scalar_one_or_none()
+        if not sub:
+            # Query plan and products
+            plan_obj = (await session.execute(select(Plan).where(Plan.name == "Standard Business Monthly"))).scalar_one()
+            prod_erp = (await session.execute(select(Product).where(Product.name == "Brightloop Core ERP"))).scalar_one()
+            var_odoo = (await session.execute(select(ProductVariant).where(ProductVariant.name == "Brand: Odoo"))).scalar_one()
+            prod_addon = (await session.execute(select(Product).where(Product.name == "Advanced Analytics Add-on"))).scalar_one()
+            acme_acc = (await session.execute(select(CustomerAccount).where(CustomerAccount.company_name == "Acme Corporation"))).scalar_one()
+
+            sub = Subscription(
+                subscription_number="SUB-2026-0001",
+                customer_account_id=acme_acc.id,
+                plan_id=plan_obj.id,
+                status=SubscriptionStatus.ACTIVE,
+                start_date=date.today() - timedelta(days=30),
+                next_billing_date=date.today() + timedelta(days=1),
+                billing_anchor_day=1,
+                payment_terms_days=15,
+            )
+            session.add(sub)
+            await session.flush()
+
+            # Line 1: ERP with Odoo variant (+560)
+            line1 = SubscriptionLine(
+                subscription_id=sub.id,
+                product_id=prod_erp.id,
+                product_variant_id=var_odoo.id,
+                quantity=1,
+                unit_price=prod_erp.sales_price + var_odoo.price_adjustment,  # 100 + 560 = 660
+            )
+            # Line 2: Analytics Add-on
+            line2 = SubscriptionLine(
+                subscription_id=sub.id,
+                product_id=prod_addon.id,
+                quantity=1,
+                unit_price=prod_addon.sales_price,  # 45
+            )
+            session.add_all([line1, line2])
+            print("  + Created Sample Subscription (SUB-2026-0001 with Odoo brand line & Analytics addon)")
+
+        await session.flush()
+
+        # 9. Sample Invoice for Acme Corporation
+        inv_query = select(Invoice).where(Invoice.invoice_number == "INV-2026-0001")
+        inv = (await session.execute(inv_query)).scalar_one_or_none()
+        if not inv and sub:
+            acme_acc = (await session.execute(select(CustomerAccount).where(CustomerAccount.company_name == "Acme Corporation"))).scalar_one()
+            inv = Invoice(
+                invoice_number="INV-2026-0001",
+                subscription_id=sub.id,
+                customer_account_id=acme_acc.id,
+                idempotency_key=f"sub_{sub.id}_initial_seed",
+                currency="USD",
+                status=InvoiceStatus.PAID,
+                billing_period_start=date.today() - timedelta(days=30),
+                billing_period_end=date.today(),
+                subtotal=Decimal("905.00"),
+                tax_amount=Decimal("90.50"),
+                discount_amount=Decimal("0.00"),
+                total_amount=Decimal("995.50"),
+                paid_amount=Decimal("995.50"),
+                issue_date=date.today() - timedelta(days=30),
+                due_date=date.today() - timedelta(days=15),
+                send_status=SendStatus.SENT,
+                customer_snapshot={
+                    "company_name": acme_acc.company_name,
+                    "billing_email": acme_acc.billing_email,
+                    "tax_id": acme_acc.tax_id,
+                },
+                billing_address_snapshot={
+                    "address": acme_acc.billing_address_line1,
+                    "city": acme_acc.billing_city,
+                    "postal_code": acme_acc.billing_postal_code,
+                    "country": acme_acc.billing_country,
+                },
+                lines=[
+                    InvoiceLine(
+                        description="Plan Base Fee — Standard Business Monthly",
+                        product_name_snapshot="Standard Business Monthly",
+                        quantity=1,
+                        unit_price_snapshot=Decimal("200.00"),
+                        subtotal=Decimal("200.00"),
+                        line_total=Decimal("200.00"),
+                    ),
+                    InvoiceLine(
+                        description="Brightloop Core ERP (Brand: Odoo)",
+                        product_name_snapshot="Brightloop Core ERP",
+                        variant_name_snapshot="Brand: Odoo",
+                        quantity=1,
+                        unit_price_snapshot=Decimal("660.00"),
+                        subtotal=Decimal("660.00"),
+                        line_total=Decimal("660.00"),
+                    ),
+                    InvoiceLine(
+                        description="Advanced Analytics Add-on",
+                        product_name_snapshot="Advanced Analytics Add-on",
+                        quantity=1,
+                        unit_price_snapshot=Decimal("45.00"),
+                        subtotal=Decimal("45.00"),
+                        line_total=Decimal("45.00"),
+                    ),
+                ]
+            )
+            session.add(inv)
+            print("  + Created Sample Invoice (INV-2026-0001)")
+
         await session.commit()
-        print("✅ Database seeding complete!")
+        print("[Done] Database seeding complete!")
 
 
 if __name__ == "__main__":

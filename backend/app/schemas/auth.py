@@ -60,6 +60,21 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        validate_password_strength(v)
+        return v
+
+
 class CustomerAccountSummary(BaseModel):
     id: uuid.UUID
     company_name: str

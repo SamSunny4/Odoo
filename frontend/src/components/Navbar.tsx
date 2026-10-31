@@ -10,24 +10,28 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleMobileMenu }) => {
   const { user, switchRole, logout } = useAuth();
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 sticky top-0 z-30 px-3 sm:px-6 flex items-center justify-between">
+    <header className="h-16 bg-white/95 backdrop-blur-md border-b border-sky-100 sticky top-0 z-30 px-3 sm:px-6 flex items-center justify-between relative shadow-xs">
+      {/* Top radiant hairline */}
+      <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-sky-400 via-yellow-400 to-sky-500" />
+
       {/* Brand & Mobile Hamburger */}
       <div className="flex items-center gap-2.5 sm:gap-3">
         {onToggleMobileMenu && (
           <button
             onClick={onToggleMobileMenu}
             aria-label="Open navigation menu"
-            className="md:hidden p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            className="md:hidden p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-sky-50 transition focus:outline-none focus:ring-2 focus:ring-sky-500/20"
           >
             <Menu className="w-5 h-5" />
           </button>
         )}
-        <div className="h-9 w-9 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg shadow-sm flex-shrink-0">
-          B
+        <div className="relative h-9 w-9 bg-gradient-to-br from-sky-500 to-sky-600 rounded-xl flex items-center justify-center text-white font-black text-lg shadow-sm shadow-sky-500/30 flex-shrink-0 ring-2 ring-yellow-400/90">
+          <span>B</span>
+          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-yellow-400 rounded-full border-2 border-white shadow-xs" />
         </div>
         <div>
-          <span className="font-semibold text-slate-900 tracking-tight text-base sm:text-lg">Brightloop</span>
-          <span className="text-[11px] text-slate-500 block leading-none">Subscription OS</span>
+          <span className="font-bold text-slate-900 tracking-tight text-base sm:text-lg">Brightloop</span>
+          <span className="text-[11px] text-sky-600 font-semibold block leading-none">Subscription OS</span>
         </div>
       </div>
 
@@ -82,11 +86,14 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleMobileMenu }) => {
               {user?.role} {user?.companyName ? `• ${user.companyName}` : ''}
             </div>
           </div>
-          <div
-            title={user?.fullName || 'User'}
-            className="h-8 w-8 rounded-full bg-slate-200 border border-slate-300 flex items-center justify-center text-xs font-semibold text-slate-700"
-          >
-            {user?.fullName?.charAt(0) || 'U'}
+          <div className="relative">
+            <div
+              title={user?.fullName || 'User'}
+              className="h-8 w-8 rounded-full bg-sky-100 border border-sky-300 flex items-center justify-center text-xs font-bold text-sky-800 shadow-2xs"
+            >
+              {user?.fullName?.charAt(0) || 'U'}
+            </div>
+            <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-yellow-400 ring-2 ring-white" />
           </div>
           <button
             onClick={logout}

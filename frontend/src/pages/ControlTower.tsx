@@ -339,7 +339,7 @@ export const ControlTower: React.FC<ControlTowerProps> = ({ onNavigate }) => {
           <AlertTriangle className="w-4 h-4" />
           Issues & Exceptions
           {flaggedCount > 0 && (
-            <span className="bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full font-bold">
+            <span className="bg-yellow-400 text-slate-950 text-xs px-2 py-0.5 rounded-full font-extrabold shadow-2xs">
               {flaggedCount}
             </span>
           )}

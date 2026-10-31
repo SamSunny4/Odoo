@@ -168,11 +168,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     <div
       onClick={() => metricKey && handleCardClick(metricKey)}
       className={`bg-white p-5 rounded-xl border transition flex flex-col justify-between ${
-        metricKey ? 'cursor-pointer hover:shadow-md' : ''
+        metricKey ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5' : ''
       } ${
         isActive
-          ? 'border-indigo-600 ring-2 ring-indigo-500/20 shadow-xs'
-          : 'border-slate-200 shadow-xs hover:border-slate-300'
+          ? 'border-sky-500 ring-2 ring-sky-400/30 shadow-md bg-gradient-to-b from-sky-50/40 to-white'
+          : 'border-sky-100/80 shadow-2xs hover:border-sky-300 hover:bg-sky-50/20'
       }`}
     >
       <div>
@@ -209,7 +209,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         ]}
         onSelectTab={onNavigate}
         badge={
-          <span className="text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">
+          <span className="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-sky-100 text-sky-800 border border-sky-200 flex items-center gap-1.5 shadow-2xs">
+            <span className="w-2 h-2 rounded-full bg-yellow-400 ring-2 ring-yellow-200 animate-pulse" />
             {summary ? `Reporting Currency: ${summary.currency}` : 'Connecting...'}
           </span>
         }
@@ -393,27 +394,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
       </div>
 
       {/* Billing Control Tower Quick-Access */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
-        <div className="space-y-1">
+      <div className="relative overflow-hidden bg-gradient-to-r from-sky-500 via-sky-600 to-sky-700 text-white rounded-2xl p-5 shadow-sm shadow-sky-600/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-sky-400/30">
+        <div className="absolute -top-12 -right-12 w-48 h-48 bg-yellow-300/20 rounded-full blur-2xl pointer-events-none" />
+        <div className="space-y-1.5 relative z-10">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center text-indigo-600">
-              <Radio className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-xs flex items-center justify-center text-yellow-300 font-bold border border-white/20">
+              <Radio className="w-4 h-4 text-yellow-300" />
             </div>
             <div>
-              <span className="font-semibold text-sm sm:text-base text-slate-900">Billing Control Tower</span>
-              <span className="ml-2 text-xs font-medium text-slate-500 hidden sm:inline">• Automated Batch Review</span>
+              <span className="font-bold text-base text-white tracking-tight">Billing Control Tower</span>
+              <span className="ml-2.5 text-xs font-bold text-yellow-300 bg-yellow-400/20 px-2 py-0.5 rounded-full border border-yellow-300/30 hidden sm:inline">
+                Automated Batch Review
+              </span>
             </div>
           </div>
-          <p className="text-xs text-slate-600 max-w-2xl leading-relaxed">
+          <p className="text-xs text-sky-100 max-w-2xl leading-relaxed">
             Preview upcoming subscription charges before generating invoices. Flags price changes, expired discounts, and prevents duplicate billing.
           </p>
         </div>
         <button
           onClick={() => onNavigate && onNavigate('control-tower')}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs sm:text-sm rounded-lg shadow-2xs transition shrink-0 flex items-center gap-1.5 self-start sm:self-auto"
+          className="relative z-10 px-4 py-2.5 bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-bold text-xs sm:text-sm rounded-xl shadow-md shadow-yellow-500/20 transition shrink-0 flex items-center gap-1.5 self-start sm:self-auto hover:-translate-y-0.5 active:translate-y-0"
         >
-          Open Control Tower
-          <ArrowRight className="w-4 h-4" />
+          <span>Open Control Tower</span>
+          <ArrowRight className="w-4 h-4 text-slate-950 stroke-[2.5]" />
         </button>
       </div>
 

@@ -35,10 +35,10 @@ export const AppContent: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center text-slate-500 text-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          <span>Restoring session...</span>
+      <div className="min-h-screen bg-sky-50/50 flex items-center justify-center text-slate-600 text-sm">
+        <div className="flex items-center gap-3 bg-white px-5 py-3 rounded-2xl shadow-sm border border-sky-100">
+          <div className="w-5 h-5 border-2 border-sky-500 border-t-yellow-400 rounded-full animate-spin" />
+          <span className="font-medium text-slate-700">Restoring session...</span>
         </div>
       </div>
     );
@@ -111,7 +111,7 @@ export const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col text-slate-900 font-sans">
+    <div className="min-h-screen bg-gradient-to-br from-sky-50/60 via-slate-50 to-sky-50/30 flex flex-col text-slate-900 font-sans">
       <Navbar onToggleMobileMenu={() => setIsMobileNavOpen(true)} />
       <MobileDrawer
         isOpen={isMobileNavOpen}

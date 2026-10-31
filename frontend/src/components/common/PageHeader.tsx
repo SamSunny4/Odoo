@@ -19,7 +19,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   actions,
 }) => {
   return (
-    <div className="space-y-1.5 pb-4 border-b border-slate-200">
+    <div className="space-y-1.5 pb-4 border-b border-sky-100">
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs items={breadcrumbs} onSelectTab={onSelectTab} />
       )}

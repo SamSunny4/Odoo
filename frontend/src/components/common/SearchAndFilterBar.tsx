@@ -50,7 +50,7 @@ export const SearchAndFilterBar: React.FC<SearchAndFilterBarProps> = ({
   );
 
   return (
-    <div className="bg-white p-3 sm:p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+    <div className="bg-white p-3 sm:p-4 rounded-xl border border-sky-100/90 shadow-2xs space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         {/* Search Input */}
         <div className="relative flex-1">
@@ -60,7 +60,7 @@ export const SearchAndFilterBar: React.FC<SearchAndFilterBarProps> = ({
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder={searchPlaceholder}
-            className="w-full pl-9 pr-8 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition text-slate-800 placeholder-slate-400"
+            className="w-full pl-9 pr-8 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50/70 focus:bg-white focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition text-slate-800 placeholder-slate-400"
           />
           {searchQuery && (
             <button

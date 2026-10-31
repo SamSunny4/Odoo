@@ -76,17 +76,18 @@ export const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-gradient-to-br from-sky-50/80 via-slate-50 to-sky-100/40 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="h-12 w-12 bg-indigo-600 rounded-xl mx-auto flex items-center justify-center text-white font-bold text-2xl shadow-sm">
-          B
+        <div className="relative h-14 w-14 bg-gradient-to-tr from-sky-600 via-sky-500 to-sky-400 rounded-2xl mx-auto flex items-center justify-center text-white font-black text-2xl shadow-lg shadow-sky-500/25 ring-4 ring-yellow-400/80">
+          <span>B</span>
+          <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-yellow-400 rounded-full border-2 border-white shadow-xs" />
         </div>
         <h2 className="mt-4 text-3xl font-extrabold text-slate-900 tracking-tight">Brightloop Software</h2>
         <p className="mt-1 text-sm text-slate-600">Unified Subscription & Recurring Billing OS</p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow-sm border border-slate-200 sm:rounded-2xl sm:px-10">
+        <div className="bg-white py-8 px-4 shadow-md shadow-sky-100 border border-sky-100 sm:rounded-2xl sm:px-10">
           {/* Mode Switch Tabs */}
           <div className="flex border-b border-slate-200 mb-6">
             <button
@@ -312,9 +313,12 @@ export const Login: React.FC = () => {
               <button
                 type="button"
                 onClick={() => fillQuickDemo('admin@brightloop.local', 'Admin@12345!')}
-                className="bg-slate-50 border border-slate-200 p-2 rounded-lg text-center hover:bg-indigo-50 hover:border-indigo-200 transition"
+                className="bg-slate-50 border border-slate-200 p-2 rounded-lg text-center hover:bg-sky-50 hover:border-sky-300 transition"
               >
-                <div className="font-semibold text-slate-800">Admin</div>
+                <div className="font-semibold text-slate-800 flex items-center justify-center gap-1">
+                  <span>Admin</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                </div>
                 <div className="text-[10px] text-slate-400">admin@...</div>
               </button>
               <button

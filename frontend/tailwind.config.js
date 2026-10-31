@@ -1,3 +1,5 @@
+import colors from 'tailwindcss/colors.js';
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -7,16 +9,23 @@ export default {
   theme: {
     extend: {
       colors: {
-        brand: {
-          50: '#f5f7ff',
-          100: '#ebf0fe',
-          500: '#4361ee',
-          600: '#3a0ca3',
-          700: '#2b0975',
-        }
-      }
+        indigo: colors.sky,
+        brand: colors.sky,
+        sky: colors.sky,
+        brightYellow: {
+          50: '#fefce8',
+          100: '#fef9c3',
+          200: '#fef08a',
+          300: '#fde047',
+          400: '#facc15', // Bright sunny electric yellow
+          500: '#eab308',
+          600: '#ca8a04',
+          700: '#a16207',
+          800: '#854d0e',
+          900: '#713f12',
+        },
+      },
     },
   },
   plugins: [],
 }
-
